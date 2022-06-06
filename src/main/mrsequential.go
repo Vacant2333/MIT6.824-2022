@@ -7,7 +7,7 @@ package main
 //
 
 import "fmt"
-import "6.824/mr"
+import "mit6.824/mr"
 import "plugin"
 import "os"
 import "log"
@@ -27,7 +27,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Usage: mrsequential xxx.so inputfiles...\n")
 		os.Exit(1)
 	}
-
+	// 读出Map Reduce函数
 	mapf, reducef := loadPlugin(os.Args[1])
 
 	//
@@ -35,8 +35,10 @@ func main() {
 	// pass it to Map,
 	// accumulate the intermediate Map output.
 	//
+	// 遍历文件名,读取单词后存入intermediate
 	intermediate := []mr.KeyValue{}
 	for _, filename := range os.Args[2:] {
+		//fmt.Println(filename)
 		file, err := os.Open(filename)
 		if err != nil {
 			log.Fatalf("cannot open %v", filename)
@@ -90,6 +92,7 @@ func main() {
 // load the application Map and Reduce functions
 // from a plugin file, e.g. ../mrapps/wc.so
 //
+// 读取插件中的Map Reduce函数,然后返回
 func loadPlugin(filename string) (func(string, string) []mr.KeyValue, func(string, []string) string) {
 	p, err := plugin.Open(filename)
 	if err != nil {
