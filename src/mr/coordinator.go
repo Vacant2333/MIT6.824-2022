@@ -13,6 +13,16 @@ type Coordinator struct {
 }
 
 // Your code here -- RPC handlers for the worker to call.
+func (c *Coordinator) getFile(args *args, reply *reply) error {
+	if len(c.files) > 0 {
+		reply.status = 1
+		reply.fileName = c.files[0]
+		c.files = c.files[1:]
+	} else {
+		reply.status = 0
+	}
+	return nil
+}
 
 // code end
 

@@ -1,6 +1,10 @@
 package mr
 
-import "fmt"
+import (
+	"fmt"
+	"io/ioutil"
+	"os"
+)
 import "log"
 import "net/rpc"
 import "hash/fnv"
@@ -27,12 +31,48 @@ func ihash(key string) int {
 // main/mrworker.go calls this function.
 //
 func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string) string) {
+	for {
+		args := args{}
+		reply := reply{}
+		ok := call("Coordinator.getFile", &args, &reply)
+		if ok == true && reply.status == 1 {
+			var intermediate []KeyValue
+			file, err := os.Open(reply.fileName)
+			if err != nil {
+				log.Fatalf("cannot open %v", reply.fileName)
+			}
+			content, err := ioutil.ReadAll(file)
+			if err != nil {
+				log.Fatalf("cannot read %v", reply.fileName)
+			}
+			file.Close()
+			intermediate = append(intermediate, mapf(reply.fileName, string(content))...)
 
-	// Your worker implementation here.
+			outName := "mr-out-" + reply.fileName
+			outFile, _ := os.Create(outName)
+			i := 0
+			for i < len(intermediate) {
+				j := i + 1
+				for j < len(intermediate) && intermediate[j].Key == intermediate[i].Key {
+					j++
+				}
+				values := []string{}
+				for k := i; k < j; k++ {
+					values = append(values, intermediate[k].Value)
+				}
+				output := reducef(intermediate[i].Key, values)
 
-	// uncomment to send the Example RPC to the coordinator.
-	// CallExample()
+				// this is the correct format for each line of Reduce output.
+				fmt.Fprintf(outFile, "%v %v\n", intermediate[i].Key, output)
 
+				i = j
+			}
+
+			outFile.Close()
+		} else {
+			return
+		}
+	}
 }
 
 //

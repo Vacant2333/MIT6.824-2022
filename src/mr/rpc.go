@@ -14,6 +14,15 @@ import "strconv"
 // and reply for an RPC.
 //
 
+type args struct {
+}
+
+type reply struct {
+	fileName string
+	// 1正常 0任务已完成退出worker
+	status int
+}
+
 type ExampleArgs struct {
 	X int
 }
