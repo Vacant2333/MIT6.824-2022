@@ -14,24 +14,17 @@ import "strconv"
 // and reply for an RPC.
 //
 
-type args struct {
+// Args Add your RPC definitions here.
+type Args struct {
 }
 
-type reply struct {
-	fileName string
+type Reply struct {
+	FileName string
 	// 1正常 0任务已完成退出worker
-	status int
+	Status int
 }
 
-type ExampleArgs struct {
-	X int
-}
-
-type ExampleReply struct {
-	Y int
-}
-
-// Add your RPC definitions here.
+// code end
 
 // Cook up a unique-ish UNIX-domain socket name
 // in /var/tmp, for the coordinator.

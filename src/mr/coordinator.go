@@ -1,6 +1,9 @@
 package mr
 
-import "log"
+import (
+	"log"
+	"sync"
+)
 import "net"
 import "os"
 import "net/rpc"
@@ -12,29 +15,24 @@ type Coordinator struct {
 	reduceNum int
 }
 
+var mx sync.Mutex
+
 // Your code here -- RPC handlers for the worker to call.
-func (c *Coordinator) getFile(args *args, reply *reply) error {
+
+func (c *Coordinator) GetFile(args *Args, reply *Reply) error {
+	mx.Lock()
 	if len(c.files) > 0 {
-		reply.status = 1
-		reply.fileName = c.files[0]
+		reply.Status = 1
+		reply.FileName = c.files[0]
 		c.files = c.files[1:]
 	} else {
-		reply.status = 0
+		reply.Status = 0
 	}
+	mx.Unlock()
 	return nil
 }
 
 // code end
-
-// Example
-// an example RPC handler.
-//
-// the RPC argument and reply types are defined in rpc.go.
-//
-func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
-	reply.Y = args.X + 1
-	return nil
-}
 
 //
 // start a thread that listens for RPCs from worker.go
