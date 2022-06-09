@@ -13,14 +13,14 @@ type Coordinator struct {
 	// Your definitions here.
 	files     []string
 	reduceNum int
+	mu        sync.Mutex
+	// code end
 }
-
-var mx sync.Mutex
 
 // Your code here -- RPC handlers for the worker to call.
 
 func (c *Coordinator) GetFile(args *Args, reply *Reply) error {
-	mx.Lock()
+	c.mu.Lock()
 	if len(c.files) > 0 {
 		reply.Status = 1
 		reply.FileName = c.files[0]
@@ -28,7 +28,7 @@ func (c *Coordinator) GetFile(args *Args, reply *Reply) error {
 	} else {
 		reply.Status = 0
 	}
-	mx.Unlock()
+	c.mu.Unlock()
 	return nil
 }
 
@@ -57,9 +57,11 @@ func (c *Coordinator) server() {
 func (c *Coordinator) Done() bool {
 	ret := false
 	// Your code here.
+	c.mu.Lock()
 	if len(c.files) == 0 {
 		ret = true
 	}
+	c.mu.Unlock()
 	// code end
 	return ret
 }

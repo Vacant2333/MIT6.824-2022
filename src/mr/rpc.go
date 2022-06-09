@@ -6,7 +6,9 @@ package mr
 // remember to capitalize all names.
 //
 
-import "os"
+import (
+	"os"
+)
 import "strconv"
 
 //
@@ -19,6 +21,7 @@ type Args struct {
 }
 
 type Reply struct {
+	// 文件名
 	FileName string
 	// 1正常 0任务已完成退出worker
 	Status int
