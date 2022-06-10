@@ -2,6 +2,7 @@ package mr
 
 import (
 	"fmt"
+	"time"
 )
 import "log"
 import "net/rpc"
@@ -29,16 +30,23 @@ func ihash(key string) int {
 // main/mrworker.go calls this function.
 //
 func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string) string) {
-	// sleep1秒再请求
-	args := Args{}
-	reply := Reply{}
-	ok := call("Coordinator.GetTask", &args, &reply)
-	if !ok {
-		log.Fatalf("Master error in worker!")
+	for {
+		args := Args{}
+		reply := Reply{}
+		// 请求任务
+		ok := call("Coordinator.GetTask", &args, &reply)
+		if !ok {
+			log.Fatalf("Master error in worker!")
+		}
+		if reply.TaskType == 1 {
+			// Map任务
+			inter := mapf(reply.FileName, reply.FileContents)
+			// 处理完了Map任务 回传给master
+			mapDone(reply.FileName, inter)
+		}
+
+		time.Sleep(time.Second)
 	}
-	inter := mapf(reply.FileName, reply.FileContents)
-	// 处理完了Map任务 回传给master
-	mapDone(reply.FileName, inter)
 }
 
 func mapDone(fileName string, inter []KeyValue) {

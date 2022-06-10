@@ -28,7 +28,7 @@ type Reply struct {
 	FileName string
 	// 文件内容
 	FileContents string
-	// 任务类型 0 Map,1 Reduce
+	// 任务类型 1 Map,2 Reduce
 	TaskType int
 	// 1正常 0任务已完成退出worker
 	Status int

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
+	"sort"
 	"sync"
 	"time"
 )
@@ -15,19 +16,36 @@ import "net/http"
 
 type Coordinator struct {
 	// Your definitions here.
-	files      map[string]*file
-	MapDoneNum int
-	reduceNum  int
-	mu         sync.Mutex
-	downWorker int
+	files       map[string]*file
+	MapDoneNum  int
+	reduceNum   int
+	mu          sync.Mutex
+	downWorker  int
+	reduceTasks []reduceTask
 	// code end
 }
 
-type file struct {
-	name    string
-	Working bool
-	MapDone bool
+type reduceTask struct {
+	key        string
+	values     []string
+	working    bool
+	reduceDone bool
 }
+
+type file struct {
+	name       string
+	Working    bool
+	MapDone    bool
+	ReduceName string
+}
+
+// for sorting by key.
+type ByKey []KeyValue
+
+// for sorting by key.
+func (a ByKey) Len() int           { return len(a) }
+func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 
 // Your code here -- RPC handlers for the worker to call.
 /*
@@ -50,9 +68,10 @@ func (c *Coordinator) GetTask(args *Args, reply *Reply) error {
 			}
 		}
 		// 设置任务类型 Map
-		reply.TaskType = 0
+		reply.TaskType = 1
 		reply.FileName = fileName
 		reply.FileContents = readFile(fileName)
+		fmt.Println("Send Map Task", fileName)
 		// 检查超时
 		go c.setMapTaskTimeOut(fileName)
 	}
@@ -67,15 +86,56 @@ func (c *Coordinator) MapDone(args *Args, reply *Reply) error {
 	c.MapDoneNum++
 	c.files[args.FileName].Working = false
 	c.files[args.FileName].MapDone = true
-	f, e := os.Create("mr-" + args.FileName[3:])
+	fName := "mr-" + args.FileName[3:]
+	f, e := os.Create(fName)
 	enc := json.NewEncoder(f)
 	for _, line := range args.Inter {
 		enc.Encode(&line)
 	}
-	fmt.Println(f, e)
+	fmt.Println("Map task done", f.Name(), e)
+	c.files[args.FileName].ReduceName = fName
 	f.Close()
+
+	if c.MapDoneNum == len(c.files) {
+		// Map任务做完了 集合所有的数据用来reduce
+		c.afterMapDone()
+	}
+
 	c.mu.Unlock()
 	return nil
+}
+
+// 集合所有的数据用来reduce
+func (c *Coordinator) afterMapDone() {
+	inter := make([]KeyValue, 0)
+	for _, file := range c.files {
+		f, _ := os.Open(file.ReduceName)
+		dec := json.NewDecoder(f)
+		for {
+			var kv KeyValue
+			if err := dec.Decode(kv); err != nil {
+				break
+			}
+			inter = append(inter, kv)
+		}
+	}
+	sort.Sort(ByKey(inter))
+
+	i := 0
+	for i < len(inter) {
+		j := i + 1
+		for j < len(inter) && inter[j].Key == inter[i].Key {
+			j++
+		}
+		var values []string
+		for k := i; k < j; k++ {
+			values = append(values, inter[k].Value)
+		}
+		c.reduceTasks = append(c.reduceTasks, reduceTask{inter[i].Key, values, false, false})
+		//output := reducef(inter[i].Key, values)
+		i = j
+	}
+	fmt.Println(c.reduceTasks)
 }
 
 // 读取文件,返回内容
@@ -102,7 +162,7 @@ func (c *Coordinator) setMapTaskTimeOut(fileName string) {
 	c.mu.Lock()
 	fmt.Println("check map task timeout", fileName)
 	if c.files[fileName].MapDone == false {
-		fmt.Println("timeout map task", fileName)
+		fmt.Println("timeout map task !!!!!", fileName)
 		c.files[fileName].Working = false
 		// 当那个worker已死亡
 		//c.reduceNum--
@@ -136,9 +196,8 @@ func (c *Coordinator) Done() bool {
 	ret := false
 	// Your code here.
 	c.mu.Lock()
-	if len(c.files) == 0 {
-		ret = true
-	}
+	// 检查退出主进程
+
 	c.mu.Unlock()
 	// code end
 	return ret
@@ -153,14 +212,15 @@ func (c *Coordinator) Done() bool {
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c := Coordinator{}
 	// Your code here.
-	cFiles := make(map[string]*file, 0)
+	cFiles := make(map[string]*file)
 	for _, fileName := range files {
-		cFiles[fileName] = &file{fileName, false, false}
+		cFiles[fileName] = &file{fileName, false, false, ""}
 	}
 	c.files = cFiles
 	c.MapDoneNum = 0
 	c.reduceNum = nReduce
 	c.downWorker = 0
+	c.reduceTasks = make([]reduceTask, 0)
 	// code end
 	c.server()
 	return &c

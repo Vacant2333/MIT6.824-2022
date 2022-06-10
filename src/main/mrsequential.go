@@ -36,7 +36,7 @@ func main() {
 	// accumulate the intermediate Map output.
 	//
 	// 遍历文件名,读取单词后存入intermediate
-	intermediate := []mr.KeyValue{}
+	var intermediate []mr.KeyValue
 	for _, filename := range os.Args[2:] {
 		//fmt.Println(filename)
 		file, err := os.Open(filename)
@@ -73,7 +73,7 @@ func main() {
 		for j < len(intermediate) && intermediate[j].Key == intermediate[i].Key {
 			j++
 		}
-		values := []string{}
+		var values []string
 		for k := i; k < j; k++ {
 			values = append(values, intermediate[k].Value)
 		}

@@ -30,7 +30,7 @@ else
   else
     # no timeout command
     TIMEOUT=
-    echo '*** Cannot find timeout command; proceeding without timeouts.'
+    # echo '*** Cannot find timeout command; proceeding without timeouts.'
   fi
 fi
 if [ "$TIMEOUT" != "" ]
