@@ -31,7 +31,7 @@ func ihash(key string) int {
 func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string) string) {
 	args := Args{}
 	reply := Reply{}
-	ok := call("Coordinator.GetFile", &args, &reply)
+	ok := call("Coordinator.GetTask", &args, &reply)
 	fmt.Println(reply, ok)
 }
 

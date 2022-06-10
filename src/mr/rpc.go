@@ -23,6 +23,8 @@ type Args struct {
 type Reply struct {
 	// 文件名
 	FileName string
+	// 任务类型 0 Map,1 Reduce
+	TaskType int
 	// 1正常 0任务已完成退出worker
 	Status int
 }
