@@ -43,10 +43,18 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 			inter := mapf(reply.FileName, reply.FileContents)
 			// 处理完了Map任务 回传给master
 			mapDone(reply.FileName, inter)
+		} else if reply.TaskType == 2 {
+			// Reduce任务
+			reduceResult := reducef(reply.Key, reply.Values)
+			// 处理完了Reduce 回传
 		}
 
-		time.Sleep(time.Second)
+		time.Sleep(50 * time.Millisecond)
 	}
+}
+
+func reduceDone(key string, result string) {
+
 }
 
 func mapDone(fileName string, inter []KeyValue) {

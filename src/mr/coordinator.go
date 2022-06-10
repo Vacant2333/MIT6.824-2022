@@ -16,12 +16,13 @@ import "net/http"
 
 type Coordinator struct {
 	// Your definitions here.
-	files       map[string]*file
-	MapDoneNum  int
-	reduceNum   int
-	mu          sync.Mutex
-	downWorker  int
-	reduceTasks []reduceTask
+	files      map[string]*file
+	MapDoneNum int
+	workerNum  int
+	mu         sync.Mutex
+
+	reduceDoneNum int
+	reduceTasks   map[string]*reduceTask
 	// code end
 }
 
@@ -74,6 +75,21 @@ func (c *Coordinator) GetTask(args *Args, reply *Reply) error {
 		fmt.Println("Send Map Task", fileName)
 		// 检查超时
 		go c.setMapTaskTimeOut(fileName)
+	} else if c.reduceDoneNum != len(c.reduceTasks) {
+		// Map做完了执行Reduce任务
+		reply.TaskType = 2
+		var keyName string
+		for _, task := range c.reduceTasks {
+			if task.working == false && task.reduceDone == false {
+				keyName = task.key
+				task.working = true
+				break
+			}
+		}
+		reply.Key = keyName
+		reply.Values = c.reduceTasks[keyName].values
+		// check reduce timeout
+		go c.setReduceTaskTimeOut(keyName)
 	}
 	c.mu.Unlock()
 	return nil
@@ -95,7 +111,7 @@ func (c *Coordinator) MapDone(args *Args, reply *Reply) error {
 	fmt.Println("Map task done", f.Name(), e)
 	c.files[args.FileName].ReduceName = fName
 	f.Close()
-
+	fmt.Println(len(c.files), c.MapDoneNum)
 	if c.MapDoneNum == len(c.files) {
 		// Map任务做完了 集合所有的数据用来reduce
 		c.afterMapDone()
@@ -113,14 +129,13 @@ func (c *Coordinator) afterMapDone() {
 		dec := json.NewDecoder(f)
 		for {
 			var kv KeyValue
-			if err := dec.Decode(kv); err != nil {
+			if err := dec.Decode(&kv); err != nil {
 				break
 			}
 			inter = append(inter, kv)
 		}
 	}
 	sort.Sort(ByKey(inter))
-
 	i := 0
 	for i < len(inter) {
 		j := i + 1
@@ -131,11 +146,9 @@ func (c *Coordinator) afterMapDone() {
 		for k := i; k < j; k++ {
 			values = append(values, inter[k].Value)
 		}
-		c.reduceTasks = append(c.reduceTasks, reduceTask{inter[i].Key, values, false, false})
-		//output := reducef(inter[i].Key, values)
+		c.reduceTasks[inter[i].Key] = &reduceTask{inter[i].Key, values, false, false}
 		i = j
 	}
-	fmt.Println(c.reduceTasks)
 }
 
 // 读取文件,返回内容
@@ -155,6 +168,20 @@ func readFile(fileName string) string {
 	return string(content)
 }
 
+func (c *Coordinator) setReduceTaskTimeOut(key string) {
+	timeOut := 10 * time.Second
+	time.Sleep(timeOut)
+	c.mu.Lock()
+	fmt.Println("check reduce task timeout", key)
+	if c.reduceTasks[key].reduceDone == false {
+		fmt.Println("reduce task timeout !!!!!", key)
+		c.reduceTasks[key].working = false
+		// 当那个worker已死亡
+		//c.reduceNum--
+	}
+	c.mu.Unlock()
+}
+
 // Map任务超时检测 10s过了还没done就复原working2
 func (c *Coordinator) setMapTaskTimeOut(fileName string) {
 	timeOut := 10 * time.Second
@@ -162,7 +189,7 @@ func (c *Coordinator) setMapTaskTimeOut(fileName string) {
 	c.mu.Lock()
 	fmt.Println("check map task timeout", fileName)
 	if c.files[fileName].MapDone == false {
-		fmt.Println("timeout map task !!!!!", fileName)
+		fmt.Println("map task timeout !!!!!", fileName)
 		c.files[fileName].Working = false
 		// 当那个worker已死亡
 		//c.reduceNum--
@@ -218,9 +245,8 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	}
 	c.files = cFiles
 	c.MapDoneNum = 0
-	c.reduceNum = nReduce
-	c.downWorker = 0
-	c.reduceTasks = make([]reduceTask, 0)
+	c.workerNum = nReduce
+	c.reduceTasks = make(map[string]*reduceTask)
 	// code end
 	c.server()
 	return &c

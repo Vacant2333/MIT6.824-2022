@@ -30,8 +30,10 @@ type Reply struct {
 	FileContents string
 	// 任务类型 1 Map,2 Reduce
 	TaskType int
-	// 1正常 0任务已完成退出worker
-	Status int
+
+	// reduce任务的内容
+	Key    string
+	Values []string
 }
 
 // code end
