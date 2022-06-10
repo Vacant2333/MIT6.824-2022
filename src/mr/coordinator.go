@@ -1,6 +1,8 @@
 package mr
 
 import (
+	"encoding/json"
+	"fmt"
 	"io/ioutil"
 	"log"
 	"sync"
@@ -13,7 +15,7 @@ import "net/http"
 
 type Coordinator struct {
 	// Your definitions here.
-	files      []file
+	files      map[string]*file
 	MapDoneNum int
 	reduceNum  int
 	mu         sync.Mutex
@@ -39,26 +41,44 @@ func (c *Coordinator) GetTask(args *Args, reply *Reply) error {
 	c.mu.Lock()
 	if c.MapDoneNum != len(c.files) {
 		// Map任务没做完
-		fileIndex := 0
-		for {
-			// 拿到一个没做Map的file index
-			if c.files[fileIndex].Working == false && c.files[fileIndex].MapDone == false {
-				// 拿到了,设置为正在处理
-				c.files[fileIndex].Working = true
+		var fileName string
+		for _, f := range c.files {
+			if f.Working == false && f.MapDone == false {
+				f.Working = true
+				fileName = f.name
 				break
 			}
-			fileIndex++
 		}
 		// 设置任务类型 Map
 		reply.TaskType = 0
-		reply.FileName = c.files[fileIndex].name
-
+		reply.FileName = fileName
+		reply.FileContents = readFile(fileName)
+		// 检查超时
+		go c.setMapTaskTimeOut(fileName)
 	}
 	c.mu.Unlock()
 	return nil
 }
 
-// 读取文件
+// MapDone worker Map任务完成后回传这个函数
+func (c *Coordinator) MapDone(args *Args, reply *Reply) error {
+	// 写入inter 设置已完成
+	c.mu.Lock()
+	c.MapDoneNum++
+	c.files[args.FileName].Working = false
+	c.files[args.FileName].MapDone = true
+	f, e := os.Create("mr-" + args.FileName[3:])
+	enc := json.NewEncoder(f)
+	for _, line := range args.Inter {
+		enc.Encode(&line)
+	}
+	fmt.Println(f, e)
+	f.Close()
+	c.mu.Unlock()
+	return nil
+}
+
+// 读取文件,返回内容
 func readFile(fileName string) string {
 	file, err := os.Open(fileName)
 	if err != nil {
@@ -76,12 +96,16 @@ func readFile(fileName string) string {
 }
 
 // Map任务超时检测 10s过了还没done就复原working2
-func (c *Coordinator) setMapTaskTimeOut(taskIndex int) {
+func (c *Coordinator) setMapTaskTimeOut(fileName string) {
 	timeOut := 10 * time.Second
 	time.Sleep(timeOut)
 	c.mu.Lock()
-	if c.files[taskIndex].MapDone == false {
-		c.files[taskIndex].Working = false
+	fmt.Println("check map task timeout", fileName)
+	if c.files[fileName].MapDone == false {
+		fmt.Println("timeout map task", fileName)
+		c.files[fileName].Working = false
+		// 当那个worker已死亡
+		//c.reduceNum--
 	}
 	c.mu.Unlock()
 }
@@ -129,9 +153,9 @@ func (c *Coordinator) Done() bool {
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c := Coordinator{}
 	// Your code here.
-	cFiles := make([]file, 0)
+	cFiles := make(map[string]*file, 0)
 	for _, fileName := range files {
-		cFiles = append(cFiles, file{fileName, false, false})
+		cFiles[fileName] = &file{fileName, false, false}
 	}
 	c.files = cFiles
 	c.MapDoneNum = 0

@@ -18,11 +18,16 @@ import "strconv"
 
 // Args Add your RPC definitions here.
 type Args struct {
+	// Map完成后的回传
+	Inter    []KeyValue
+	FileName string
 }
 
 type Reply struct {
 	// 文件名
 	FileName string
+	// 文件内容
+	FileContents string
 	// 任务类型 0 Map,1 Reduce
 	TaskType int
 	// 1正常 0任务已完成退出worker
