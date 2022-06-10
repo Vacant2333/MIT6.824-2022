@@ -23,6 +23,9 @@ type Coordinator struct {
 
 	reduceDoneNum int
 	reduceTasks   map[string]*reduceTask
+
+	// reduce输出
+	reduceOut []KeyValue
 	// code end
 }
 
@@ -101,13 +104,25 @@ func (c *Coordinator) ReduceDone(args *Args, reply *Reply) error {
 	c.reduceDoneNum++
 	c.reduceTasks[args.Key].working = false
 	c.reduceTasks[args.Key].reduceDone = true
-	fName := "mr-out-" + args.Key
-	f, _ := os.Create(fName)
-	fmt.Fprintf(f, "%v %v", args.Key, args.Re)
-	f.Close()
-	//fmt.Println("Reduce task done", args.Key)
+	c.reduceOut = append(c.reduceOut, KeyValue{args.Key, args.Re})
+	if c.reduceDoneNum == len(c.reduceTasks) {
+		// Reduce任务完成
+		c.afterReduceDone()
+	}
+
 	c.mu.Unlock()
 	return nil
+}
+
+func (c *Coordinator) afterReduceDone() {
+	fName := "mr-out.txt"
+	f, _ := os.Create(fName)
+	fmt.Println("all reduce tasks down, group output...")
+	for _, line := range c.reduceOut {
+		fmt.Fprintf(f, "%v %v\n", line.Key, line.Value)
+	}
+
+	f.Close()
 }
 
 // MapDone worker Map任务完成后回传这个函数
@@ -187,7 +202,7 @@ func (c *Coordinator) setReduceTaskTimeOut(key string) {
 	timeOut := 10 * time.Second
 	time.Sleep(timeOut)
 	c.mu.Lock()
-	fmt.Println("check reduce task timeout", key)
+	//fmt.Println("check reduce task timeout", key)
 	if c.reduceTasks[key].reduceDone == false {
 		fmt.Println("reduce task timeout !!!!!", key)
 		c.reduceTasks[key].working = false
@@ -262,6 +277,7 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c.MapDoneNum = 0
 	c.workerNum = nReduce
 	c.reduceTasks = make(map[string]*reduceTask)
+	c.reduceOut = make([]KeyValue, 0)
 	// code end
 	c.server()
 	return &c

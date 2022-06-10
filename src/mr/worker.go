@@ -2,7 +2,6 @@ package mr
 
 import (
 	"fmt"
-	"time"
 )
 import "log"
 import "net/rpc"
@@ -49,7 +48,7 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 			// 处理完了Reduce 回传
 			reduceDone(reply.Key, reduceResult)
 		}
-		time.Sleep(50 * time.Millisecond)
+		//time.Sleep(50 * time.Millisecond)
 	}
 }
 
