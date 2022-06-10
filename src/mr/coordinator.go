@@ -95,6 +95,21 @@ func (c *Coordinator) GetTask(args *Args, reply *Reply) error {
 	return nil
 }
 
+func (c *Coordinator) ReduceDone(args *Args, reply *Reply) error {
+	c.mu.Lock()
+
+	c.reduceDoneNum++
+	c.reduceTasks[args.Key].working = false
+	c.reduceTasks[args.Key].reduceDone = true
+	fName := "mr-out-" + args.Key
+	f, _ := os.Create(fName)
+	fmt.Fprintf(f, "%v %v", args.Key, args.Re)
+	f.Close()
+	//fmt.Println("Reduce task done", args.Key)
+	c.mu.Unlock()
+	return nil
+}
+
 // MapDone worker Map任务完成后回传这个函数
 func (c *Coordinator) MapDone(args *Args, reply *Reply) error {
 	// 写入inter 设置已完成

@@ -21,6 +21,10 @@ type Args struct {
 	// Map完成后的回传
 	Inter    []KeyValue
 	FileName string
+
+	// Reduce完成后的回传
+	Key string
+	Re  string
 }
 
 type Reply struct {

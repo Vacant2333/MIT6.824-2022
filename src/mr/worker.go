@@ -47,14 +47,21 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 			// Reduce任务
 			reduceResult := reducef(reply.Key, reply.Values)
 			// 处理完了Reduce 回传
+			reduceDone(reply.Key, reduceResult)
 		}
-
 		time.Sleep(50 * time.Millisecond)
 	}
 }
 
 func reduceDone(key string, result string) {
-
+	args := Args{}
+	args.Key = key
+	args.Re = result
+	reply := Reply{}
+	ok := call("Coordinator.ReduceDone", &args, &reply)
+	if !ok {
+		log.Fatalf("Worker ReduceDone error!")
+	}
 }
 
 func mapDone(fileName string, inter []KeyValue) {
