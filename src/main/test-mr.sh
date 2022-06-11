@@ -101,6 +101,9 @@ fi
 # wait for remaining workers and coordinator to exit.
 wait
 
+# 断点 只测试wc
+# exit 1
+
 #########################################################
 # now indexer
 rm -f mr-*

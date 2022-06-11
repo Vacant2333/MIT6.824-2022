@@ -71,11 +71,15 @@ func (c *Coordinator) GetTask(args *Args, reply *Reply) error {
 				break
 			}
 		}
+		if fileName == "" {
+			c.mu.Unlock()
+			return nil
+		}
 		// 设置任务类型 Map
 		reply.TaskType = 1
 		reply.FileName = fileName
 		reply.FileContents = readFile(fileName)
-		fmt.Println("Send Map Task", fileName)
+		//fmt.Println("Send Map Task", fileName)
 		// 检查超时
 		go c.setMapTaskTimeOut(fileName)
 	} else if c.reduceDoneNum != len(c.reduceTasks) {
@@ -89,10 +93,14 @@ func (c *Coordinator) GetTask(args *Args, reply *Reply) error {
 				break
 			}
 		}
+		if keyName == "" {
+			c.mu.Unlock()
+			return nil
+		}
 		reply.Key = keyName
 		reply.Values = c.reduceTasks[keyName].values
 		// check reduce timeout
-		go c.setReduceTaskTimeOut(keyName)
+		//go c.setReduceTaskTimeOut(keyName)
 	}
 	c.mu.Unlock()
 	return nil
@@ -102,12 +110,17 @@ func (c *Coordinator) ReduceDone(args *Args, reply *Reply) error {
 	c.mu.Lock()
 
 	c.reduceDoneNum++
+	if args.Key == "" {
+		c.mu.Unlock()
+		return nil
+	}
 	c.reduceTasks[args.Key].working = false
 	c.reduceTasks[args.Key].reduceDone = true
 	c.reduceOut = append(c.reduceOut, KeyValue{args.Key, args.Re})
 	if c.reduceDoneNum == len(c.reduceTasks) {
 		// Reduce任务完成
 		c.afterReduceDone()
+		os.Exit(1)
 	}
 
 	c.mu.Unlock()
@@ -117,7 +130,10 @@ func (c *Coordinator) ReduceDone(args *Args, reply *Reply) error {
 func (c *Coordinator) afterReduceDone() {
 	fName := "mr-out.txt"
 	f, _ := os.Create(fName)
-	fmt.Println("all reduce tasks down, group output...")
+
+	//fmt.Println("all reduce tasks down, group output...", f.Name(), len(c.reduceOut))
+
+	sort.Sort(ByKey(c.reduceOut))
 	for _, line := range c.reduceOut {
 		fmt.Fprintf(f, "%v %v\n", line.Key, line.Value)
 	}
@@ -133,20 +149,19 @@ func (c *Coordinator) MapDone(args *Args, reply *Reply) error {
 	c.files[args.FileName].Working = false
 	c.files[args.FileName].MapDone = true
 	fName := "mr-" + args.FileName[3:]
-	f, e := os.Create(fName)
+	f, _ := os.Create(fName)
 	enc := json.NewEncoder(f)
 	for _, line := range args.Inter {
 		enc.Encode(&line)
 	}
-	fmt.Println("Map task done", f.Name(), e)
+	//fmt.Println("Map task done", f.Name(), e)
 	c.files[args.FileName].ReduceName = fName
 	f.Close()
-	fmt.Println(len(c.files), c.MapDoneNum)
+	//fmt.Println(len(c.files), c.MapDoneNum)
 	if c.MapDoneNum == len(c.files) {
 		// Map任务做完了 集合所有的数据用来reduce
 		c.afterMapDone()
 	}
-
 	c.mu.Unlock()
 	return nil
 }
@@ -204,7 +219,7 @@ func (c *Coordinator) setReduceTaskTimeOut(key string) {
 	c.mu.Lock()
 	//fmt.Println("check reduce task timeout", key)
 	if c.reduceTasks[key].reduceDone == false {
-		fmt.Println("reduce task timeout !!!!!", key)
+		//fmt.Println("reduce task timeout !!!!!", key)
 		c.reduceTasks[key].working = false
 		// 当那个worker已死亡
 		//c.reduceNum--
@@ -217,9 +232,9 @@ func (c *Coordinator) setMapTaskTimeOut(fileName string) {
 	timeOut := 10 * time.Second
 	time.Sleep(timeOut)
 	c.mu.Lock()
-	fmt.Println("check map task timeout", fileName)
+	//fmt.Println("check map task timeout", fileName)
 	if c.files[fileName].MapDone == false {
-		fmt.Println("map task timeout !!!!!", fileName)
+		//fmt.Println("map task timeout !!!!!", fileName)
 		c.files[fileName].Working = false
 		// 当那个worker已死亡
 		//c.reduceNum--
