@@ -1,13 +1,8 @@
 package mr
 
 import (
-	"encoding/json"
-	"fmt"
-	"io/ioutil"
 	"log"
-	"sort"
 	"sync"
-	"time"
 )
 import "net"
 import "os"
@@ -15,41 +10,25 @@ import "net/rpc"
 import "net/http"
 
 type Coordinator struct {
-	// Your definitions here.
-	files      map[string]*file
-	MapDoneNum int
-	workerNum  int
-	mu         sync.Mutex
-
-	reduceDoneNum int
-	reduceTasks   map[string]*reduceTask
-
-	// reduce输出
-	reduceOut []KeyValue
-	// code end
+	// Mutex锁
+	lock sync.Mutex
+	// Reduce任务数量
+	reduceCount int
+	// Worker进程ID
+	workers []int
+	// 当前状态,0正在做Map任务,1正在做Reduce任务,2等Worker全部退出
+	status int
+	// Map任务
+	mapTasks map[string]*mapTask
 }
 
-type reduceTask struct {
-	key        string
-	values     []string
-	working    bool
-	reduceDone bool
+// Map任务结构
+type mapTask struct {
+	id      int
+	name    string
+	working bool
+	done    bool
 }
-
-type file struct {
-	name       string
-	Working    bool
-	MapDone    bool
-	ReduceName string
-}
-
-// for sorting by key.
-type ByKey []KeyValue
-
-// for sorting by key.
-func (a ByKey) Len() int           { return len(a) }
-func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
-func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 
 // Your code here -- RPC handlers for the worker to call.
 /*
@@ -59,187 +38,43 @@ func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 4.关闭所有worker后退出自己
 */
 
-func (c *Coordinator) GetTask(args *Args, reply *Reply) error {
-	c.mu.Lock()
-	if c.MapDoneNum != len(c.files) {
-		// Map任务没做完
-		var fileName string
-		for _, f := range c.files {
-			if f.Working == false && f.MapDone == false {
-				f.Working = true
-				fileName = f.name
-				break
-			}
-		}
-		if fileName == "" {
-			c.mu.Unlock()
-			return nil
-		}
-		// 设置任务类型 Map
-		reply.TaskType = 1
-		reply.FileName = fileName
-		reply.FileContents = readFile(fileName)
-		//fmt.Println("Send Map Task", fileName)
-		// 检查超时
-		go c.setMapTaskTimeOut(fileName)
-	} else if c.reduceDoneNum != len(c.reduceTasks) {
-		// Map做完了执行Reduce任务
-		reply.TaskType = 2
-		var keyName string
-		for _, task := range c.reduceTasks {
-			if task.working == false && task.reduceDone == false {
-				keyName = task.key
+// Fuck Worker访问此接口拿到一个任务
+func (c *Coordinator) Fuck(n *None, reply *FuckReply) error {
+	c.lock.Lock()
+	// 检查状态
+	if c.status == 0 {
+		// Map任务没做完,找一个没做的任务给worker
+		mapName := ""
+		for _, task := range c.mapTasks {
+			if task.working == false && task.done == false {
+				mapName = task.name
 				task.working = true
-				break
 			}
 		}
-		if keyName == "" {
-			c.mu.Unlock()
-			return nil
+		if mapName == "" {
+			log.Fatalf("Master get map task fail!")
 		}
-		reply.Key = keyName
-		reply.Values = c.reduceTasks[keyName].values
-		// check reduce timeout
-		go c.setReduceTaskTimeOut(keyName)
+		// 回传给worker的数据
+		reply.MapID = c.mapTasks[mapName].id
+		reply.MapName = mapName
+		reply.TaskType = 1
+		reply.ReduceCount = c.reduceCount
+	} else if c.status == 1 {
+
 	}
-	c.mu.Unlock()
+
+	c.lock.Unlock()
 	return nil
 }
 
-func (c *Coordinator) ReduceDone(args *Args, reply *Reply) error {
-	c.mu.Lock()
-
-	c.reduceDoneNum++
-	if args.Key == "" {
-		c.mu.Unlock()
-		return nil
-	}
-	c.reduceTasks[args.Key].working = false
-	c.reduceTasks[args.Key].reduceDone = true
-	c.reduceOut = append(c.reduceOut, KeyValue{args.Key, args.Re})
-	if c.reduceDoneNum == len(c.reduceTasks) {
-		// Reduce任务完成
-		c.afterReduceDone()
-		os.Exit(1)
-	}
-
-	c.mu.Unlock()
+// RegisterWorker Worker访问此接口来注册到Master,传回一个id
+func (c *Coordinator) RegisterWorker(n *None, workerID *int) error {
+	c.lock.Lock()
+	*workerID = len(c.workers)
+	c.workers = append(c.workers, *workerID)
+	log.Printf("Worker[%v] register to master now!", *workerID)
+	c.lock.Unlock()
 	return nil
-}
-
-func (c *Coordinator) afterReduceDone() {
-	fName := "mr-out.txt"
-	f, _ := os.Create(fName)
-
-	//fmt.Println("all reduce tasks down, group output...", f.Name(), len(c.reduceOut))
-
-	sort.Sort(ByKey(c.reduceOut))
-	for _, line := range c.reduceOut {
-		fmt.Fprintf(f, "%v %v\n", line.Key, line.Value)
-	}
-
-	f.Close()
-}
-
-// MapDone worker Map任务完成后回传这个函数
-func (c *Coordinator) MapDone(args *Args, reply *Reply) error {
-	// 写入inter 设置已完成
-	c.mu.Lock()
-	c.MapDoneNum++
-	c.files[args.FileName].Working = false
-	c.files[args.FileName].MapDone = true
-	fName := "mr-" + args.FileName[3:]
-	f, _ := os.Create(fName)
-	enc := json.NewEncoder(f)
-	for _, line := range args.Inter {
-		enc.Encode(&line)
-	}
-	//fmt.Println("Map task done", f.Name(), e)
-	c.files[args.FileName].ReduceName = fName
-	f.Close()
-	//fmt.Println(len(c.files), c.MapDoneNum)
-	if c.MapDoneNum == len(c.files) {
-		// Map任务做完了 集合所有的数据用来reduce
-		c.afterMapDone()
-	}
-	c.mu.Unlock()
-	return nil
-}
-
-// 集合所有的数据用来reduce
-func (c *Coordinator) afterMapDone() {
-	inter := make([]KeyValue, 0)
-	for _, file := range c.files {
-		f, _ := os.Open(file.ReduceName)
-		dec := json.NewDecoder(f)
-		for {
-			var kv KeyValue
-			if err := dec.Decode(&kv); err != nil {
-				break
-			}
-			inter = append(inter, kv)
-		}
-	}
-	sort.Sort(ByKey(inter))
-	i := 0
-	for i < len(inter) {
-		j := i + 1
-		for j < len(inter) && inter[j].Key == inter[i].Key {
-			j++
-		}
-		var values []string
-		for k := i; k < j; k++ {
-			values = append(values, inter[k].Value)
-		}
-		c.reduceTasks[inter[i].Key] = &reduceTask{inter[i].Key, values, false, false}
-		i = j
-	}
-}
-
-// 读取文件,返回内容
-func readFile(fileName string) string {
-	file, err := os.Open(fileName)
-	if err != nil {
-		log.Fatalf("cannot open %v", fileName)
-	}
-	content, err := ioutil.ReadAll(file)
-	if err != nil {
-		log.Fatalf("cannot read %v", fileName)
-	}
-	err = file.Close()
-	if err != nil {
-		log.Fatalf("cannot close %v", fileName)
-	}
-	return string(content)
-}
-
-func (c *Coordinator) setReduceTaskTimeOut(key string) {
-	timeOut := 10 * time.Second
-	time.Sleep(timeOut)
-	c.mu.Lock()
-	//fmt.Println("check reduce task timeout", key)
-	if c.reduceTasks[key].reduceDone == false {
-		//fmt.Println("reduce task timeout !!!!!", key)
-		c.reduceTasks[key].working = false
-		// 当那个worker已死亡
-		//c.reduceNum--
-	}
-	c.mu.Unlock()
-}
-
-// Map任务超时检测 10s过了还没done就复原working2
-func (c *Coordinator) setMapTaskTimeOut(fileName string) {
-	timeOut := 10 * time.Second
-	time.Sleep(timeOut)
-	c.mu.Lock()
-	//fmt.Println("check map task timeout", fileName)
-	if c.files[fileName].MapDone == false {
-		//fmt.Println("map task timeout !!!!!", fileName)
-		c.files[fileName].Working = false
-		// 当那个worker已死亡
-		//c.reduceNum--
-	}
-	c.mu.Unlock()
 }
 
 // code end
@@ -263,14 +98,13 @@ func (c *Coordinator) server() {
 // main/mrcoordinator.go calls Done() periodically to find out
 // if the entire job has finished.
 //
-// mrcoordinator通过这个来检查是否任务已完成
+// mrcoordinator通过这个来检查是否所有任务已完成
 func (c *Coordinator) Done() bool {
 	ret := false
 	// Your code here.
-	c.mu.Lock()
-	// 检查退出主进程
-
-	c.mu.Unlock()
+	c.lock.Lock()
+	// todo:检查退出
+	c.lock.Unlock()
 	// code end
 	return ret
 }
@@ -283,15 +117,15 @@ func (c *Coordinator) Done() bool {
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c := Coordinator{}
 	// Your code here.
-	cFiles := make(map[string]*file)
+	// 初始化coordinator
+	c.reduceCount = nReduce
+	c.workers = make([]int, 0)
+	c.status = 0
+	// 初始化Map任务
+	c.mapTasks = make(map[string]*mapTask)
 	for _, fileName := range files {
-		cFiles[fileName] = &file{fileName, false, false, ""}
+		c.mapTasks[fileName] = &mapTask{len(c.mapTasks), fileName, false, false}
 	}
-	c.files = cFiles
-	c.MapDoneNum = 0
-	c.workerNum = nReduce
-	c.reduceTasks = make(map[string]*reduceTask)
-	c.reduceOut = make([]KeyValue, 0)
 	// code end
 	c.server()
 	return &c

@@ -2,6 +2,8 @@ package mr
 
 import (
 	"fmt"
+	"io/ioutil"
+	"os"
 )
 import "log"
 import "net/rpc"
@@ -29,49 +31,57 @@ func ihash(key string) int {
 // main/mrworker.go calls this function.
 //
 func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string) string) {
+	workerID := register()
 	for {
-		args := Args{}
-		reply := Reply{}
-		// 请求任务
-		ok := call("Coordinator.GetTask", &args, &reply)
+		reply := FuckReply{}
+		ok := call("Coordinator.Fuck", &None{}, &reply)
 		if !ok {
-			log.Fatalf("Master error in worker!")
+			log.Fatalf("Worker get task fail!")
 		}
-		if reply.TaskType == 1 {
-			// Map任务
-			inter := mapf(reply.FileName, reply.FileContents)
-			// 处理完了Map任务 回传给master
-			mapDone(reply.FileName, inter)
-		} else if reply.TaskType == 2 {
-			// Reduce任务
-			reduceResult := reducef(reply.Key, reply.Values)
-			// 处理完了Reduce 回传
-			reduceDone(reply.Key, reduceResult)
+		if reply.Exit == false {
+			if reply.TaskType == 1 {
+				// Map任务
+				mapResult := mapf(reply.MapName, readFile(reply.MapName))
+				// 根据ReduceCount拆分
+				reduceContent := make([][]KeyValue, reply.ReduceCount)
+
+				for _, kv := range mapResult {
+					key := ihash(kv.Key) % reply.ReduceCount
+					reduceContent[key] = append(reduceContent[key], kv)
+				}
+			}
+		} else {
+			// todo:回传exit信号
+			log.Fatalf("Worker[%v] exit!", workerID)
 		}
-		//time.Sleep(50 * time.Millisecond)
 	}
 }
 
-func reduceDone(key string, result string) {
-	args := Args{}
-	args.Key = key
-	args.Re = result
-	reply := Reply{}
-	ok := call("Coordinator.ReduceDone", &args, &reply)
+// 注册当前worker到master,返回master给的id
+func register() int {
+	var workerID int
+	ok := call("Coordinator.RegisterWorker", &None{}, &workerID)
 	if !ok {
-		log.Fatalf("Worker ReduceDone error!")
+		log.Fatalf("Worker register to master fail!")
 	}
+	return workerID
 }
 
-func mapDone(fileName string, inter []KeyValue) {
-	args := Args{}
-	args.FileName = fileName
-	args.Inter = inter
-	reply := Reply{}
-	ok := call("Coordinator.MapDone", &args, &reply)
-	if !ok {
-		log.Fatalf("Worker MapDone error!")
+// 读取文件,返回内容
+func readFile(fileName string) string {
+	file, err := os.Open(fileName)
+	if err != nil {
+		log.Fatalf("Master cannot open %v", fileName)
 	}
+	content, err := ioutil.ReadAll(file)
+	if err != nil {
+		log.Fatalf("Master cannot read %v", fileName)
+	}
+	err = file.Close()
+	if err != nil {
+		log.Fatalf("Master cannot close %v", fileName)
+	}
+	return string(content)
 }
 
 //
@@ -85,14 +95,11 @@ func call(rpcname string, args interface{}, reply interface{}) bool {
 	if err != nil {
 		log.Fatal("dialing:", err)
 	}
-
 	defer c.Close()
-
 	err = c.Call(rpcname, args, reply)
 	if err == nil {
 		return true
 	}
-
 	fmt.Println(err)
 	return false
 }

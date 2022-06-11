@@ -17,28 +17,24 @@ import "strconv"
 //
 
 // Args Add your RPC definitions here.
-type Args struct {
-	// Map完成后的回传
-	Inter    []KeyValue
-	FileName string
 
-	// Reduce完成后的回传
-	Key string
-	Re  string
-}
-
-type Reply struct {
-	// 文件名
-	FileName string
-	// 文件内容
-	FileContents string
-	// 任务类型 1 Map,2 Reduce
+type FuckReply struct {
+	// 任务类型:[1] Map任务, [2] Reduce任务
 	TaskType int
-
-	// reduce任务的内容
-	Key    string
-	Values []string
+	// Reduce任务数量
+	ReduceCount int
+	// Map任务文件名
+	MapName string
+	// Map任务ID
+	MapID int
+	// Reduce任务ID
+	ReduceID int
+	// 是否退出Worker
+	Exit bool
 }
+
+// None 空结构,用来占位
+type None struct{}
 
 // code end
 
