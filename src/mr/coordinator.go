@@ -3,6 +3,7 @@ package mr
 import (
 	"log"
 	"sync"
+	"time"
 )
 import "net"
 import "os"
@@ -18,8 +19,23 @@ type Coordinator struct {
 	workers []int
 	// 当前状态,0正在做Map任务,1正在做Reduce任务,2等Worker全部退出
 	status int
+
 	// Map任务
 	mapTasks map[string]*mapTask
+	// Map已完成数量
+	mapTaskDoneCount int
+
+	// Reduce任务
+	reduceTasks []*reduceTask
+	// Reduce任务完成数量
+	reduceTaskDoneCount int
+}
+
+// Reduce任务结构
+type reduceTask struct {
+	id      int
+	working bool
+	done    bool
 }
 
 // Map任务结构
@@ -47,22 +63,98 @@ func (c *Coordinator) Fuck(n *None, reply *FuckReply) error {
 		mapName := ""
 		for _, task := range c.mapTasks {
 			if task.working == false && task.done == false {
+				// 找到了可以给他的map任务
 				mapName = task.name
 				task.working = true
+				break
 			}
 		}
 		if mapName == "" {
-			log.Fatalf("Master get map task fail!")
+			// 可能找不到可以做的map任务,就传0让worker等一会
+			reply.TaskType = 0
+			c.lock.Unlock()
+			return nil
 		}
 		// 回传给worker的数据
 		reply.MapID = c.mapTasks[mapName].id
 		reply.MapName = mapName
 		reply.TaskType = 1
 		reply.ReduceCount = c.reduceCount
+		go c.checkTaskTimeOut(1, mapName, 0)
 	} else if c.status == 1 {
-
+		// Map做完了,在做Reduce任务
+		reduceID := -1
+		for i, task := range c.reduceTasks {
+			if task.working == false && task.done == false {
+				// 找到了可以给他的reduce任务
+				reduceID = i
+				task.working = true
+				break
+			}
+		}
+		if reduceID == -1 {
+			// 没找到可以做的reduce任务,也传0
+			reply.TaskType = 0
+			c.lock.Unlock()
+			return nil
+		}
+		reply.TaskType = 2
+		reply.ReduceID = reduceID
+		reply.MapTaskCount = c.mapTaskDoneCount
+		go c.checkTaskTimeOut(2, "", reduceID)
 	}
 
+	c.lock.Unlock()
+	return nil
+}
+
+// checkTaskTimeOut 检查任务超时
+func (c *Coordinator) checkTaskTimeOut(taskType int, mapName string, reduceID int) {
+	time.Sleep(10 * time.Second)
+	c.lock.Lock()
+	// todo:删除死了的worker
+	if taskType == 1 {
+		// 检查map任务
+		if c.mapTasks[mapName].done == false {
+			log.Printf("Map task[%v] dead", mapName)
+			c.mapTasks[mapName].working = false
+		}
+	} else if taskType == 2 {
+		// 检查reduce任务
+		if c.reduceTasks[reduceID].done == false {
+			log.Printf("Reduce task[%v] dead", reduceID)
+			c.reduceTasks[reduceID].working = false
+		}
+	}
+	c.lock.Unlock()
+}
+
+// TaskDone worker任务完成回传
+func (c *Coordinator) TaskDone(args *TaskDoneArgs, n *None) error {
+	c.lock.Lock()
+	if args.TaskType == 1 {
+		// Map任务完成
+		c.mapTasks[args.MapName].done = true
+		c.mapTasks[args.MapName].working = false
+		c.mapTaskDoneCount++
+		log.Printf("Map task[%v] done", args.MapName)
+		if c.mapTaskDoneCount == len(c.mapTasks) {
+			// 所有Map任务已完成
+			c.status = 1
+			log.Println("All map tasks done!")
+		}
+	} else if args.TaskType == 2 {
+		// Reduce任务完成
+		c.reduceTasks[args.ReduceID].done = true
+		c.reduceTasks[args.ReduceID].working = false
+		c.reduceTaskDoneCount++
+		log.Printf("Reduce Task[%v] done", args.ReduceID)
+		if c.reduceTaskDoneCount == len(c.reduceTasks) {
+			// 所有Reduce任务已完成
+			c.status = 2
+			log.Printf("All reduce tasks done!")
+		}
+	}
 	c.lock.Unlock()
 	return nil
 }
@@ -123,8 +215,13 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c.status = 0
 	// 初始化Map任务
 	c.mapTasks = make(map[string]*mapTask)
-	for _, fileName := range files {
-		c.mapTasks[fileName] = &mapTask{len(c.mapTasks), fileName, false, false}
+	for i, fileName := range files {
+		c.mapTasks[fileName] = &mapTask{i, fileName, false, false}
+	}
+	// 初始化Reduce任务
+	c.reduceTasks = make([]*reduceTask, nReduce)
+	for i := 0; i < nReduce; i++ {
+		c.reduceTasks[i] = &reduceTask{i, false, false}
 	}
 	// code end
 	c.server()

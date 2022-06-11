@@ -29,12 +29,27 @@ type FuckReply struct {
 	MapID int
 	// Reduce任务ID
 	ReduceID int
+	// Reduce任务用的,map任务数量
+	MapTaskCount int
 	// 是否退出Worker
 	Exit bool
 }
 
+// TaskDoneArgs 任务完成结构
+type TaskDoneArgs struct {
+	// 任务类型:[1] Map任务, [2] Reduce任务
+	TaskType int
+	// Map任务文件名
+	MapName string
+	// Reduce任务ID
+	ReduceID int
+}
+
 // None 空结构,用来占位
 type None struct{}
+
+// 中间文件格式 mr-MapID-ReduceID
+var interFileName = "mr-%v-%v.tmp"
 
 // code end
 
