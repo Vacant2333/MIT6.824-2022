@@ -1,0 +1,6 @@
+pg-being_ernest.txt 1
+pg-dorian_gray.txt 1
+pg-frankenstein.txt 1
+pg-grimm.txt 1
+pg-huckleberry_finn.txt 1
+pg-metamorphosis.txt 1

@@ -100,7 +100,7 @@ func (c *Coordinator) GetTask(args *Args, reply *Reply) error {
 		reply.Key = keyName
 		reply.Values = c.reduceTasks[keyName].values
 		// check reduce timeout
-		//go c.setReduceTaskTimeOut(keyName)
+		go c.setReduceTaskTimeOut(keyName)
 	}
 	c.mu.Unlock()
 	return nil
@@ -280,7 +280,6 @@ func (c *Coordinator) Done() bool {
 // main/mrcoordinator.go calls this function.
 // nReduce is the number of reduce tasks to use.
 //
-// new 一个coordinator,nReduce是worker的数量
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c := Coordinator{}
 	// Your code here.
