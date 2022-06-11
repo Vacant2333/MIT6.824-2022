@@ -45,11 +45,19 @@ type TaskDoneArgs struct {
 	ReduceID int
 }
 
+// WorkerExitArgs worker退出 请求
+type WorkerExitArgs struct {
+	WorkerID int
+}
+
 // None 空结构,用来占位
 type None struct{}
 
 // 中间文件格式 mr-MapID-ReduceID
-var interFileName = "mr-%v-%v.tmp"
+var interFileName = "mr-%v-%v"
+
+// 输出文件格式 mr-out-ReduceID
+var outFileName = "mr-out-%v"
 
 // code end
 

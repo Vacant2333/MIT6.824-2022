@@ -102,7 +102,31 @@ func (c *Coordinator) Fuck(n *None, reply *FuckReply) error {
 		reply.ReduceID = reduceID
 		reply.MapTaskCount = c.mapTaskDoneCount
 		go c.checkTaskTimeOut(2, "", reduceID)
+	} else if c.status == 2 {
+		// 发送退出信号,任务都完成了
+		reply.Exit = true
 	}
+	c.lock.Unlock()
+	return nil
+}
+
+// WorkerExit Worker退出回传
+func (c *Coordinator) WorkerExit(args *WorkerExitArgs, n *None) error {
+	c.lock.Lock()
+	// 从workers删除这个worker
+	workerKey := -1
+	for i, worker := range c.workers {
+		if worker == args.WorkerID {
+			workerKey = i
+			break
+		}
+	}
+	// 检查是否有这个worker,可能这是以前没死完的worker
+	if workerKey == -1 {
+		log.Fatalf("Worker[%v] exit error! its not my worker!", args.WorkerID)
+	}
+	// 删除这个worker
+	c.workers = append(c.workers[:workerKey], c.workers[workerKey+1:]...)
 
 	c.lock.Unlock()
 	return nil
@@ -195,7 +219,10 @@ func (c *Coordinator) Done() bool {
 	ret := false
 	// Your code here.
 	c.lock.Lock()
-	// todo:检查退出
+	if c.status == 2 && len(c.workers) == 0 {
+		log.Printf("Master done now!")
+		ret = true
+	}
 	c.lock.Unlock()
 	// code end
 	return ret

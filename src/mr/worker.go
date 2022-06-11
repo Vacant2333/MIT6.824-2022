@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"sort"
 	"time"
 )
 import "log"
@@ -18,6 +19,14 @@ type KeyValue struct {
 	Key   string
 	Value string
 }
+
+// ByKey for sorting by key.
+type ByKey []KeyValue
+
+// Len for sorting by key.
+func (a ByKey) Len() int           { return len(a) }
+func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 
 //
 // use ihash(key) % NReduce to choose the reduce
@@ -43,7 +52,7 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 		if reply.Exit == false {
 			if reply.TaskType == 0 {
 				// 没拿到任务 休息一会
-				time.Sleep(100 * time.Millisecond)
+				time.Sleep(10 * time.Millisecond)
 			} else if reply.TaskType == 1 {
 				// Map任务
 				mapResult := mapf(reply.MapName, readFile(reply.MapName))
@@ -84,14 +93,41 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 					}
 				}
 				// 读入了所有的kv 排序
-
+				sort.Sort(ByKey(inter))
+				// 合并同类kv且写入文件
+				fileName := fmt.Sprintf(outFileName, reply.ReduceID)
+				f, _ := os.Create(fileName)
+				i := 0
+				for i < len(inter) {
+					j := i + 1
+					for j < len(inter) && inter[j].Key == inter[i].Key {
+						j++
+					}
+					var values []string
+					for k := i; k < j; k++ {
+						values = append(values, inter[k].Value)
+					}
+					output := reducef(inter[i].Key, values)
+					fmt.Fprintf(f, "%v %v\n", inter[i].Key, output)
+					i = j
+				}
+				f.Close()
 				// 回传Task任务完成
 				taskDone(2, "", reply.ReduceID)
 			}
 		} else {
-			// todo:回传exit信号
-			log.Fatalf("Worker[%v] exit!", workerID)
+			workerExit(workerID)
+			os.Exit(1)
 		}
+	}
+}
+
+// worker退出 回传给master
+func workerExit(workerID int) {
+	args := WorkerExitArgs{workerID}
+	ok := call("Coordinator.WorkerExit", &args, &None{})
+	if !ok {
+		log.Fatalf("Worker[%v] exit fail!", workerID)
 	}
 }
 
