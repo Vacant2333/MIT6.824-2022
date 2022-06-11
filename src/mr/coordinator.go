@@ -33,17 +33,19 @@ type Coordinator struct {
 
 // Reduce任务结构
 type reduceTask struct {
-	id      int
-	working bool
-	done    bool
+	id       int
+	working  bool
+	done     bool
+	workerID int
 }
 
 // Map任务结构
 type mapTask struct {
-	id      int
-	name    string
-	working bool
-	done    bool
+	id       int
+	name     string
+	working  bool
+	done     bool
+	workerID int
 }
 
 // Your code here -- RPC handlers for the worker to call.
@@ -55,7 +57,7 @@ type mapTask struct {
 */
 
 // Fuck Worker访问此接口拿到一个任务
-func (c *Coordinator) Fuck(n *None, reply *FuckReply) error {
+func (c *Coordinator) Fuck(args *FuckArgs, reply *FuckReply) error {
 	c.lock.Lock()
 	// 检查状态
 	if c.status == 0 {
@@ -65,6 +67,7 @@ func (c *Coordinator) Fuck(n *None, reply *FuckReply) error {
 			if task.working == false && task.done == false {
 				// 找到了可以给他的map任务
 				mapName = task.name
+				task.workerID = args.WorkerID
 				task.working = true
 				break
 			}
@@ -88,6 +91,7 @@ func (c *Coordinator) Fuck(n *None, reply *FuckReply) error {
 			if task.working == false && task.done == false {
 				// 找到了可以给他的reduce任务
 				reduceID = i
+				task.workerID = args.WorkerID
 				task.working = true
 				break
 			}
@@ -113,41 +117,47 @@ func (c *Coordinator) Fuck(n *None, reply *FuckReply) error {
 // WorkerExit Worker退出回传
 func (c *Coordinator) WorkerExit(args *WorkerExitArgs, n *None) error {
 	c.lock.Lock()
+	log.Printf("Worker[%v] exit!", args.WorkerID)
+	c.deleteWorker(args.WorkerID)
+	c.lock.Unlock()
+	return nil
+}
+
+// 删除worker,需要提前lock
+func (c *Coordinator) deleteWorker(workerID int) {
 	// 从workers删除这个worker
 	workerKey := -1
 	for i, worker := range c.workers {
-		if worker == args.WorkerID {
+		if worker == workerID {
 			workerKey = i
 			break
 		}
 	}
 	// 检查是否有这个worker,可能这是以前没死完的worker
 	if workerKey == -1 {
-		log.Fatalf("Worker[%v] exit error! its not my worker!", args.WorkerID)
+		log.Fatalf("Worker[%v] exit error! its not my worker!", workerID)
 	}
 	// 删除这个worker
 	c.workers = append(c.workers[:workerKey], c.workers[workerKey+1:]...)
-
-	c.lock.Unlock()
-	return nil
 }
 
 // checkTaskTimeOut 检查任务超时
 func (c *Coordinator) checkTaskTimeOut(taskType int, mapName string, reduceID int) {
 	time.Sleep(10 * time.Second)
 	c.lock.Lock()
-	// todo:删除死了的worker
 	if taskType == 1 {
 		// 检查map任务
 		if c.mapTasks[mapName].done == false {
-			log.Printf("Map task[%v] dead", mapName)
+			log.Printf("Map task[%v] dead, worker[%v]:", mapName, c.mapTasks[mapName].workerID)
 			c.mapTasks[mapName].working = false
+			c.deleteWorker(c.mapTasks[mapName].workerID)
 		}
 	} else if taskType == 2 {
 		// 检查reduce任务
 		if c.reduceTasks[reduceID].done == false {
-			log.Printf("Reduce task[%v] dead", reduceID)
+			log.Printf("Reduce task[%v] dead, worker[%v]", reduceID, c.reduceTasks[reduceID].workerID)
 			c.reduceTasks[reduceID].working = false
+			c.deleteWorker(c.reduceTasks[reduceID].workerID)
 		}
 	}
 	c.lock.Unlock()
@@ -187,6 +197,7 @@ func (c *Coordinator) TaskDone(args *TaskDoneArgs, n *None) error {
 func (c *Coordinator) RegisterWorker(n *None, workerID *int) error {
 	c.lock.Lock()
 	*workerID = len(c.workers)
+	//*workerID = rand.Int()
 	c.workers = append(c.workers, *workerID)
 	log.Printf("Worker[%v] register to master now!", *workerID)
 	c.lock.Unlock()
@@ -243,12 +254,12 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	// 初始化Map任务
 	c.mapTasks = make(map[string]*mapTask)
 	for i, fileName := range files {
-		c.mapTasks[fileName] = &mapTask{i, fileName, false, false}
+		c.mapTasks[fileName] = &mapTask{i, fileName, false, false, 0}
 	}
 	// 初始化Reduce任务
 	c.reduceTasks = make([]*reduceTask, nReduce)
 	for i := 0; i < nReduce; i++ {
-		c.reduceTasks[i] = &reduceTask{i, false, false}
+		c.reduceTasks[i] = &reduceTask{i, false, false, 0}
 	}
 	// code end
 	c.server()

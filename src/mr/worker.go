@@ -43,9 +43,10 @@ func ihash(key string) int {
 //
 func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string) string) {
 	workerID := register()
+	args := FuckArgs{workerID}
 	for {
 		reply := FuckReply{}
-		ok := call("Coordinator.Fuck", &None{}, &reply)
+		ok := call("Coordinator.Fuck", &args, &reply)
 		if !ok {
 			log.Fatalf("Worker get task fail!")
 		}

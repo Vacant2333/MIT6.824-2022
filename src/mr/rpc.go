@@ -18,6 +18,10 @@ import "strconv"
 
 // Args Add your RPC definitions here.
 
+type FuckArgs struct {
+	WorkerID int
+}
+
 type FuckReply struct {
 	// 任务类型:[1] Map任务, [2] Reduce任务
 	TaskType int
