@@ -23,7 +23,7 @@ import (
 	"sync/atomic"
 
 	//	"6.824/labgob"
-	"6.824/labrpc"
+	"mit6.824/labrpc"
 )
 
 //
