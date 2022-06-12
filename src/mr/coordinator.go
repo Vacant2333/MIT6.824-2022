@@ -135,10 +135,11 @@ func (c *Coordinator) deleteWorker(workerID int) {
 	}
 	// 检查是否有这个worker,可能这是以前没死完的worker
 	if workerKey == -1 {
-		log.Fatalf("Worker[%v] exit error! its not my worker!", workerID)
+		log.Printf("Worker[%v] exit error! its not my worker!", workerID)
+	} else {
+		// 删除这个worker
+		c.workers = append(c.workers[:workerKey], c.workers[workerKey+1:]...)
 	}
-	// 删除这个worker
-	c.workers = append(c.workers[:workerKey], c.workers[workerKey+1:]...)
 }
 
 // checkTaskTimeOut 检查任务超时
