@@ -148,14 +148,14 @@ func (c *Coordinator) checkTaskTimeOut(taskType int, mapName string, reduceID in
 	if taskType == 1 {
 		// 检查map任务
 		if c.mapTasks[mapName].done == false {
-			log.Printf("Map task[%v] dead, worker[%v]:", mapName, c.mapTasks[mapName].workerID)
+			log.Printf("Map task[%v] dead, worker[%v] dead!:", mapName, c.mapTasks[mapName].workerID)
 			c.mapTasks[mapName].working = false
 			c.deleteWorker(c.mapTasks[mapName].workerID)
 		}
 	} else if taskType == 2 {
 		// 检查reduce任务
 		if c.reduceTasks[reduceID].done == false {
-			log.Printf("Reduce task[%v] dead, worker[%v]", reduceID, c.reduceTasks[reduceID].workerID)
+			log.Printf("Reduce task[%v] dead, worker[%v] dead!", reduceID, c.reduceTasks[reduceID].workerID)
 			c.reduceTasks[reduceID].working = false
 			c.deleteWorker(c.reduceTasks[reduceID].workerID)
 		}
@@ -197,7 +197,6 @@ func (c *Coordinator) TaskDone(args *TaskDoneArgs, n *None) error {
 func (c *Coordinator) RegisterWorker(n *None, workerID *int) error {
 	c.lock.Lock()
 	*workerID = len(c.workers)
-	//*workerID = rand.Int()
 	c.workers = append(c.workers, *workerID)
 	log.Printf("Worker[%v] register to master now!", *workerID)
 	c.lock.Unlock()
