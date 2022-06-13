@@ -59,6 +59,7 @@ type mapTask struct {
 // Fuck Worker访问此接口拿到一个任务
 func (c *Coordinator) Fuck(args *FuckArgs, reply *FuckReply) error {
 	c.lock.Lock()
+	defer c.lock.Unlock()
 	// 检查状态
 	if c.status == 0 {
 		// Map任务没做完,找一个没做的任务给worker
@@ -75,7 +76,6 @@ func (c *Coordinator) Fuck(args *FuckArgs, reply *FuckReply) error {
 		if mapName == "" {
 			// 可能找不到可以做的map任务,就传0让worker等一会
 			reply.TaskType = 0
-			c.lock.Unlock()
 			return nil
 		}
 		// 回传给worker的数据
@@ -99,7 +99,6 @@ func (c *Coordinator) Fuck(args *FuckArgs, reply *FuckReply) error {
 		if reduceID == -1 {
 			// 没找到可以做的reduce任务,也传0
 			reply.TaskType = 0
-			c.lock.Unlock()
 			return nil
 		}
 		reply.TaskType = 2
@@ -110,7 +109,6 @@ func (c *Coordinator) Fuck(args *FuckArgs, reply *FuckReply) error {
 		// 发送退出信号,任务都完成了
 		reply.Exit = true
 	}
-	c.lock.Unlock()
 	return nil
 }
 

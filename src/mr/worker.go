@@ -6,7 +6,6 @@ import (
 	"io/ioutil"
 	"os"
 	"sort"
-	"time"
 )
 import "log"
 import "net/rpc"
@@ -53,7 +52,7 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 		if reply.Exit == false {
 			if reply.TaskType == 0 {
 				// 没拿到任务 休息一会
-				time.Sleep(10 * time.Millisecond)
+				// time.Sleep(time.Millisecond)
 			} else if reply.TaskType == 1 {
 				// Map任务
 				mapResult := mapf(reply.MapName, readFile(reply.MapName))
@@ -83,8 +82,8 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 				for i := 0; i < reply.MapTaskCount; i++ {
 					// 读取所有这个reduceID的文件
 					fileName := fmt.Sprintf(interFileName, i, reply.ReduceID)
-					f, _ := os.Open(fileName)
-					dec := json.NewDecoder(f)
+					reduceF, _ := os.Open(fileName)
+					dec := json.NewDecoder(reduceF)
 					for {
 						var kv KeyValue
 						if err := dec.Decode(&kv); err != nil {
@@ -92,12 +91,13 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 						}
 						inter = append(inter, kv)
 					}
+					reduceF.Close()
 				}
 				// 读入了所有的kv 排序
 				sort.Sort(ByKey(inter))
 				// 合并同类kv且写入文件
 				fileName := fmt.Sprintf(outFileName, reply.ReduceID)
-				f, _ := os.Create(fileName)
+				outF, _ := os.Create(fileName)
 				i := 0
 				for i < len(inter) {
 					j := i + 1
@@ -109,10 +109,10 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 						values = append(values, inter[k].Value)
 					}
 					output := reducef(inter[i].Key, values)
-					fmt.Fprintf(f, "%v %v\n", inter[i].Key, output)
+					fmt.Fprintf(outF, "%v %v\n", inter[i].Key, output)
 					i = j
 				}
-				f.Close()
+				outF.Close()
 				// 回传Task任务完成
 				taskDone(2, "", reply.ReduceID)
 			}
