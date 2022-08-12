@@ -49,6 +49,13 @@ type ApplyMsg struct {
 	SnapshotIndex int
 }
 
+// role is follower, candidate, or leader.
+const (
+	Follower  = 1
+	Candidate = 2
+	Leader    = 3
+)
+
 //
 // A Go object implementing a single Raft peer.
 //
@@ -60,6 +67,11 @@ type Raft struct {
 	dead      int32               // set by Kill()
 
 	// Your data here (2A, 2B, 2C).
+	// 2A start
+	currentTerm int // 当前任期
+	votedFor    int // 当前投票给的用户
+	role        int // 角色，follower, candidate, leader
+	// 2A end
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
 
@@ -72,6 +84,10 @@ func (rf *Raft) GetState() (int, bool) {
 	var term int
 	var isleader bool
 	// Your code here (2A).
+	// 2A start
+	term = rf.currentTerm
+	isleader = rf.role == Leader
+	// 2A end
 	return term, isleader
 }
 
@@ -139,6 +155,10 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 //
 type RequestVoteArgs struct {
 	// Your data here (2A, 2B).
+	// 2A start
+	Term        int // 候选人的任期号(自己的)
+	CandidateId int // 请求选票的候选人的ID(peer's index)
+	// 2A end
 }
 
 //
@@ -147,6 +167,10 @@ type RequestVoteArgs struct {
 //
 type RequestVoteReply struct {
 	// Your data here (2A).
+	// 2A start
+	Term        int  // 当前任期号,以便候选人更新自己的任期号
+	voteGranted bool // 候选人是否赢得选票
+	// 2A end
 }
 
 //
@@ -154,6 +178,13 @@ type RequestVoteReply struct {
 //
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
+	// 2A start
+	reply.Term = rf.currentTerm
+	reply.voteGranted = false
+	if args.Term >= rf.currentTerm && (rf.votedFor == -1 || rf.votedFor == args.CandidateId) {
+		reply.voteGranted = true
+	}
+	// 2A end
 }
 
 //
@@ -236,7 +267,7 @@ func (rf *Raft) killed() bool {
 }
 
 // The ticker go routine starts a new election if this peer hasn't received
-// heartsbeats recently.
+// heartbeats recently.
 func (rf *Raft) ticker() {
 	for rf.killed() == false {
 
