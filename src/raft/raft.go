@@ -398,6 +398,10 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 	if reply.Success == true {
 		// 更新自己的心跳包超时时间
 		rf.heartBeatTimeOut = time.Now().Add(getRandElectionTimeOut())
+		if args.Term > rf.currentTerm {
+			rf.role = Follower
+			rf.currentTerm = args.Term
+		}
 	}
 }
 
