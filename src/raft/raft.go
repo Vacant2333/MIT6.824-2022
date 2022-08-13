@@ -21,6 +21,7 @@ import (
 	//	"bytes"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	//	"6.824/labgob"
 	"mit6.824/labrpc"
@@ -54,6 +55,9 @@ const (
 	Follower  = 1
 	Candidate = 2
 	Leader    = 3
+
+	TickerSleepTime   = 10  // Ticker 睡眠时间 ms
+	HeartBeatSendTime = 120 // 心跳包发送时间 ms
 )
 
 //
@@ -68,9 +72,10 @@ type Raft struct {
 
 	// Your data here (2A, 2B, 2C).
 	// 2A start
-	currentTerm int // 当前任期
-	votedFor    int // 当前投票给的用户
-	role        int // 角色，follower, candidate, leader
+	currentTerm   int       // 当前任期
+	votedFor      int       // 当前投票给的用户
+	role          int       // 角色，follower, candidate, leader
+	heartBeatTime time.Time // 上一次收到心跳包的时间
 	// 2A end
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
@@ -80,7 +85,6 @@ type Raft struct {
 // return currentTerm and whether this server
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
-
 	var term int
 	var isleader bool
 	// Your code here (2A).
@@ -184,6 +188,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	if args.Term >= rf.currentTerm && (rf.votedFor == -1 || rf.votedFor == args.CandidateId) {
 		reply.voteGranted = true
 	}
+	// todo:1
 	// 2A end
 }
 
@@ -270,11 +275,14 @@ func (rf *Raft) killed() bool {
 // heartbeats recently.
 func (rf *Raft) ticker() {
 	for rf.killed() == false {
-
 		// Your code here to check if a leader election should
 		// be started and to randomize sleeping time using
 		// time.Sleep().
+		// 2A start
+		// 检查是否要开始领导选举
 
+		time.Sleep(TickerSleepTime * time.Millisecond)
+		// 2A end
 	}
 }
 
@@ -289,15 +297,19 @@ func (rf *Raft) ticker() {
 // Make() must return quickly, so it should start goroutines
 // for any long-running work.
 //
-func Make(peers []*labrpc.ClientEnd, me int,
-	persister *Persister, applyCh chan ApplyMsg) *Raft {
+func Make(peers []*labrpc.ClientEnd, me int, persister *Persister, applyCh chan ApplyMsg) *Raft {
 	rf := &Raft{}
 	rf.peers = peers
 	rf.persister = persister
 	rf.me = me
 
 	// Your initialization code here (2A, 2B, 2C).
-
+	// 2A start
+	rf.currentTerm = 0
+	rf.votedFor = -1
+	rf.role = Follower
+	rf.heartBeatTime = time.Now()
+	// 2A end
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
