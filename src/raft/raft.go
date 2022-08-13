@@ -18,6 +18,7 @@ package raft
 //
 
 import (
+	"math/rand"
 	//	"bytes"
 	"sync"
 	"sync/atomic"
@@ -58,7 +59,20 @@ const (
 
 	TickerSleepTime   = 10  // Ticker 睡眠时间 ms
 	HeartBeatSendTime = 120 // 心跳包发送时间 ms
+
+	ElectionTimeOutStart = 300 // 选举超时时间(也用于检查是否需要开始选举) 区间
+	ElectionTimeOutEnd   = 450
 )
+
+// 获得一个300~450ms之间的选举超时时间
+func getRandElectionTimeOut() time.Duration {
+	return time.Duration((rand.Int() % (ElectionTimeOutEnd - ElectionTimeOutStart)) + ElectionTimeOutStart)
+}
+
+// 心跳包是否超时
+func (rf *Raft) isHeartBeatTimeOut() bool {
+	return rf.heartBeatTimeOut.Before(time.Now())
+}
 
 //
 // A Go object implementing a single Raft peer.
@@ -72,10 +86,10 @@ type Raft struct {
 
 	// Your data here (2A, 2B, 2C).
 	// 2A start
-	currentTerm   int       // 当前任期
-	votedFor      int       // 当前投票给的用户
-	role          int       // 角色，follower, candidate, leader
-	heartBeatTime time.Time // 上一次收到心跳包的时间
+	currentTerm      int       // 当前任期
+	votedFor         int       // 当前投票给的用户
+	role             int       // 角色，follower, candidate, leader
+	heartBeatTimeOut time.Time // 上一次收到心跳包的时间+随机选举超时时间(在收到心跳包后再次随机一个)
 	// 2A end
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
@@ -188,7 +202,6 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	if args.Term >= rf.currentTerm && (rf.votedFor == -1 || rf.votedFor == args.CandidateId) {
 		reply.voteGranted = true
 	}
-	// todo:1
 	// 2A end
 }
 
@@ -279,11 +292,41 @@ func (rf *Raft) ticker() {
 		// be started and to randomize sleeping time using
 		// time.Sleep().
 		// 2A start
-		// 检查是否要开始领导选举
-
+		// 检查是否要开始领导选举 检查超时时间和角色,并且没有投票给别人
+		if rf.isHeartBeatTimeOut() {
+			go rf.startElection()
+		}
 		time.Sleep(TickerSleepTime * time.Millisecond)
 		// 2A end
 	}
+}
+
+// 开始一次选举
+func (rf *Raft) startElection() {
+	// 转换角色,发送RequestVote
+	rf.currentTerm += 1
+	rf.role = Candidate
+	rf.votedFor = rf.me
+	voteCount := 1
+	startTime := time.Now()
+	// 投票
+	voteArgs := &RequestVoteArgs{rf.currentTerm, rf.me}
+	voteReply := make([]*RequestVoteReply, len(rf.peers))
+	// 请求某个peer投票给自己 如果成功就自增count
+	requestVote := func(index int) {
+		rf.sendRequestVote(index, voteArgs, voteReply[index])
+		if voteReply[index].voteGranted == true {
+			voteCount += 1
+		}
+	}
+	// 给所有的peers发送RequestVote
+	for i := 0; i < len(rf.peers); i++ {
+		if i != rf.me {
+			voteReply[i] = new(RequestVoteReply)
+			go requestVote(i)
+		}
+	}
+
 }
 
 //
@@ -308,7 +351,7 @@ func Make(peers []*labrpc.ClientEnd, me int, persister *Persister, applyCh chan 
 	rf.currentTerm = 0
 	rf.votedFor = -1
 	rf.role = Follower
-	rf.heartBeatTime = time.Now()
+	rf.heartBeatTimeOut = time.Now().Add(getRandElectionTimeOut())
 	// 2A end
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
