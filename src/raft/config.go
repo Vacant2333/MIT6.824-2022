@@ -456,6 +456,7 @@ func (cfg *config) checkOneLeader() int {
 		if len(leaders) != 0 {
 			return leaders[lastTermWithLeader][0]
 		}
+		//fmt.Println(leaders)
 	}
 	cfg.t.Fatalf("expected one leader, got none")
 	return -1
