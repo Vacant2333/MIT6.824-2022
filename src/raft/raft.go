@@ -60,10 +60,10 @@ const (
 
 	TickerSleepTime   = 20 * time.Millisecond  // Ticker 睡眠时间 ms
 	ElectionSleepTime = 15 * time.Millisecond  // 选举睡眠时间
-	HeartBeatSendTime = 110 * time.Millisecond // 心跳包发送时间 ms
+	HeartBeatSendTime = 120 * time.Millisecond // 心跳包发送时间 ms
 
-	ElectionTimeOutStart = 300 // 选举超时时间(也用于检查是否需要开始选举) 区间
-	ElectionTimeOutEnd   = 450
+	ElectionTimeOutStart = 500 // 选举超时时间(也用于检查是否需要开始选举) 区间
+	ElectionTimeOutEnd   = 800
 )
 
 // 获得一个随机选举超时时间
@@ -73,8 +73,6 @@ func getRandElectionTimeOut() time.Duration {
 
 // 心跳包是否超时
 func (rf *Raft) isHeartBeatTimeOut() bool {
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
 	return rf.heartBeatTimeOut.Before(time.Now())
 }
 
@@ -108,9 +106,10 @@ func (rf *Raft) GetState() (int, bool) {
 	// Your code here (2A).
 	// 2A start
 	rf.mu.Lock()
-	defer rf.mu.Unlock()
 	term = rf.currentTerm
 	isleader = rf.role == Leader
+	//fmt.Println("get state", rf.me)
+	rf.mu.Unlock()
 	// 2A end
 	return term, isleader
 }
@@ -320,6 +319,7 @@ func (rf *Raft) startElection() {
 	rf.currentTerm += 1
 	rf.role = Candidate
 	rf.votedFor = rf.me
+	var mu sync.Mutex
 	voteCount := 1
 	electionTimeOut := time.Now().Add(getRandElectionTimeOut())
 	// 投票
@@ -329,9 +329,12 @@ func (rf *Raft) startElection() {
 	requestVote := func(server int) {
 		ok := rf.sendRequestVote(server, voteArgs, voteReply[server])
 		if voteReply[server].VoteGranted == true && ok {
+			mu.Lock()
 			voteCount += 1
+			fmt.Printf("server[%v] vote count[%v/%v]\n", rf.me, voteCount, len(rf.peers))
+			mu.Unlock()
+			fmt.Printf("server[%v] get vote from [%v]\n", rf.me, server)
 		}
-		fmt.Printf("server[%v] get vote from [%v]\n", rf.me, server)
 	}
 	// 给所有的peers发送RequestVote
 	for i := 0; i < len(rf.peers); i++ {
@@ -344,22 +347,31 @@ func (rf *Raft) startElection() {
 	// 检查条件
 	for rf.killed() == false {
 		rf.mu.Lock()
+		mu.Lock()
+		//fmt.Printf("%v %v \n", float64(len(rf.peers))/2, float64(voteCount))
 		if float64(len(rf.peers))/2 <= float64(voteCount) {
 			// 赢得选举,成为领导人
 			rf.role = Leader
+			// 清空投票(投给了自己)
+			rf.votedFor = -1
 			go rf.imLeader()
 			fmt.Printf("server[%d] win a election\n", rf.me)
+			rf.mu.Unlock()
 			return
 		}
+		mu.Unlock()
 		if rf.isHeartBeatTimeOut() == false {
 			// 其他人赢得了选举
 			rf.role = Follower
+			rf.mu.Unlock()
 			return
 		}
 		if electionTimeOut.Before(time.Now()) {
 			// 选举超时 重新开始一次选举
 			go rf.startElection()
 			fmt.Printf("server[%d] election time out\n", rf.me)
+			rf.mu.Unlock()
+			//rf.startElection()
 			return
 		}
 		rf.mu.Unlock()
@@ -382,24 +394,25 @@ type AppendEntriesReply struct {
 // 成为Leader,给所有人发送心跳包
 func (rf *Raft) imLeader() {
 	// 清空投票
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
-	rf.votedFor = -1
-	for rf.killed() == false && rf.role == Leader {
+	for rf.killed() == false {
+		rf.mu.Lock()
+		if rf.role != Leader {
+			fmt.Printf("server[%d] now is not a leader!\n", rf.me)
+			break
+		}
+		rf.mu.Unlock()
 		for server := 0; server < len(rf.peers); server++ {
 			if server != rf.me {
 				rf.sendHeartBeat(server)
 			}
 		}
+		//fmt.Println("send once")
 		time.Sleep(HeartBeatSendTime)
 	}
-	fmt.Printf("server[%d] now is not a leader!\n", rf.me)
 }
 
 // 发送心跳包
 func (rf *Raft) sendHeartBeat(server int) bool {
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
 	args := &AppendEnTriesArgs{rf.currentTerm, rf.me, true}
 	reply := new(AppendEntriesReply)
 	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
@@ -408,8 +421,6 @@ func (rf *Raft) sendHeartBeat(server int) bool {
 
 // follower 接收追加/心跳包
 func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply) {
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
 	reply.Term = rf.currentTerm
 	reply.Success = true
 	// 检查条件 5.2
@@ -419,6 +430,7 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 
 	// 成功接收心跳包
 	if reply.Success == true {
+		rf.mu.Lock()
 		// 更新自己的心跳包超时时间
 		rf.heartBeatTimeOut = time.Now().Add(getRandElectionTimeOut())
 		rf.votedFor = -1
@@ -429,6 +441,7 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 			rf.currentTerm = args.Term
 			fmt.Printf("->(role:%d term:%d)\n", rf.role, rf.currentTerm)
 		}
+		rf.mu.Unlock()
 	}
 }
 
