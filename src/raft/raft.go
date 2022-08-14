@@ -58,12 +58,12 @@ const (
 	Candidate = 2
 	Leader    = 3
 
-	TickerSleepTime   = 30 * time.Millisecond  // Ticker 睡眠时间 ms
-	ElectionSleepTime = 25 * time.Millisecond  // 选举睡眠时间
-	HeartBeatSendTime = 125 * time.Millisecond // 心跳包发送时间 ms
+	TickerSleepTime   = 20 * time.Millisecond  // Ticker 睡眠时间 ms
+	ElectionSleepTime = 15 * time.Millisecond  // 选举睡眠时间
+	HeartBeatSendTime = 100 * time.Millisecond // 心跳包发送时间 ms
 
 	ElectionTimeOutStart = 500 // 选举超时时间(也用于检查是否需要开始选举) 区间
-	ElectionTimeOutEnd   = 750
+	ElectionTimeOutEnd   = 800
 )
 
 // 获得一个随机选举超时时间
@@ -90,7 +90,7 @@ type Raft struct {
 	// 2A start
 	currentTerm      int       // 当前任期
 	votedFor         int       // 当前投票给的用户
-	voteCount        int       // 当前得票数量
+	voteCount        int       // 当前得票数量(默认为1)
 	role             int       // 角色，follower, candidate, leader
 	heartBeatTimeOut time.Time // 上一次收到心跳包的时间+随机选举超时时间(在收到心跳包后再次随机一个)
 	// 2A end
@@ -158,7 +158,6 @@ func (rf *Raft) readPersist(data []byte) {
 // have more recent info since it communicate the snapshot on applyCh.
 //
 func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int, snapshot []byte) bool {
-
 	// Your code here (2D).
 
 	return true
@@ -203,7 +202,21 @@ type RequestVoteReply struct {
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
 	// 2A start
-
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	// 如果sender的term大于receiver,更新receiver的term和role
+	if args.Term > rf.currentTerm {
+		fmt.Printf("server[%v] trans to Follower by server[%v]\n", rf.me, args.CandidateId)
+		rf.currentTerm = args.Term
+		rf.role = Follower
+		rf.heartBeatTimeOut = time.Now().Add(getRandElectionTimeOut())
+	}
+	// 是否投票给他
+	if args.Term >= rf.currentTerm && (rf.votedFor == -1 || rf.votedFor == args.CandidateId) {
+		reply.VoteGranted = true
+		rf.votedFor = args.CandidateId
+	}
+	reply.Term = rf.currentTerm
 	// 2A end
 }
 
@@ -295,7 +308,15 @@ func (rf *Raft) ticker() {
 		// time.Sleep().
 		// 2A start
 		// 检查是否要开始领导选举 检查超时时间和角色,并且没有投票给别人
-
+		rf.mu.Lock()
+		if rf.isHeartBeatTimeOut() && rf.votedFor == -1 && rf.role == Follower {
+			rf.mu.Unlock()
+			go rf.startElection()
+		} else {
+			rf.mu.Unlock()
+		}
+		//rf.mu.Unlock()
+		time.Sleep(TickerSleepTime)
 		// 2A end
 	}
 }
@@ -314,15 +335,82 @@ type AppendEntriesReply struct {
 
 // 开始一场选举
 func (rf *Raft) startElection() {
+	// 初始化
+	rf.resetVoteData(true)
+	rf.mu.Lock()
+	fmt.Printf("server[%v] start the election now!\n", rf.me)
+	rf.currentTerm += 1
+	rf.role = Candidate
+	// 选举超时时间
+	electionTimeOut := time.Now().Add(getRandElectionTimeOut())
+	//fmt.Println(electionTimeOut)
+	rf.mu.Unlock()
+	// 收集选票
+	rf.collectVotes()
+	// 检查结果
+	for rf.killed() == false {
+		rf.mu.Lock()
+		if rf.voteCount > len(rf.peers)/2 {
+			// 赢得了大部分选票
+			//fmt.Println(rf.voteCount, len(rf.peers)/2)
+			fmt.Printf("server[%v] is Leader now!\n", rf.me)
+			rf.mu.Unlock()
+			rf.resetVoteData(false)
+			go rf.imLeader()
+			return
+		}
+		if rf.role == Follower {
+			// 其他人成为了Leader
+			fmt.Printf("server[%v] another server is Leader now\n", rf.me)
+			//rf.heartBeatTimeOut = time.Now().Add(getRandElectionTimeOut())
+			rf.mu.Unlock()
+			rf.resetVoteData(false)
+			return
+		}
+		if electionTimeOut.Before(time.Now()) {
+			// 选举超时
+			fmt.Printf("server[%v] election time out!\n", rf.me)
+			//fmt.Println(rf.voteCount)
+			rf.mu.Unlock()
+			rf.resetVoteData(false)
+			go rf.startElection()
+			return
+		}
+		rf.mu.Unlock()
+		time.Sleep(ElectionSleepTime)
+	}
+}
 
+// 向所有peers收集选票
+func (rf *Raft) collectVotes() {
+	// 收集选票
+	askVote := func(server int, args *RequestVoteArgs, reply *RequestVoteReply) {
+		ok := rf.sendRequestVote(server, args, reply)
+		if ok && reply.VoteGranted {
+			rf.mu.Lock()
+			fmt.Printf("server[%v] get a vote from server[%v]\n", rf.me, server)
+			rf.voteCount += 1
+			rf.mu.Unlock()
+		}
+	}
+	rf.mu.Lock()
+	args := &RequestVoteArgs{rf.currentTerm, rf.me}
+	reply := make([]*RequestVoteReply, len(rf.peers))
+	for server := 0; server < len(rf.peers); server++ {
+		if server != rf.me {
+			reply[server] = &RequestVoteReply{}
+			go askVote(server, args, reply[server])
+		}
+	}
+	rf.mu.Unlock()
 }
 
 // 成为Leader,给所有人发送心跳包
 func (rf *Raft) imLeader() {
 	rf.mu.Lock()
-	rf.votedFor = -1
-	rf.voteCount = 1
+	rf.role = Leader
 	rf.mu.Unlock()
+	rf.resetVoteData(false)
 	for rf.killed() == false {
 		rf.mu.Lock()
 		if rf.role != Leader {
@@ -336,13 +424,26 @@ func (rf *Raft) imLeader() {
 			}
 		}
 		rf.mu.Unlock()
+		time.Sleep(HeartBeatSendTime)
 	}
+}
+
+// 重置投票信息
+func (rf *Raft) resetVoteData(voteMe bool) {
+	rf.mu.Lock()
+	rf.voteCount = 0
+	rf.votedFor = -1
+	if voteMe {
+		rf.voteCount += 1
+		rf.votedFor = rf.me
+	}
+	rf.mu.Unlock()
 }
 
 // 发送心跳包
 func (rf *Raft) sendHeartBeat(server int) bool {
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
+	//rf.mu.Lock()
+	//defer rf.mu.Unlock()
 	args := &AppendEnTriesArgs{rf.currentTerm, rf.me, true}
 	reply := &AppendEntriesReply{}
 	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
@@ -351,16 +452,16 @@ func (rf *Raft) sendHeartBeat(server int) bool {
 
 // follower 接收追加/心跳包
 func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply) {
+	rf.resetVoteData(false)
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	// 如果sender的term大于receiver,更新receiver的term和role
 	if args.Term > rf.currentTerm {
 		rf.role = Follower
 		rf.currentTerm = args.Term
-		reply.Term = rf.currentTerm
 	}
 	if args.IsHeartBeat {
 		// 处理心跳包
-		reply.Term = rf.currentTerm
 		if args.Term < rf.currentTerm {
 			reply.Success = false
 		} else {
@@ -368,10 +469,12 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 			// 更新心跳包超时时间
 			rf.role = Follower
 			rf.heartBeatTimeOut = time.Now().Add(getRandElectionTimeOut())
+			fmt.Printf("server[%v] get a heartbeat pack\n", rf.me)
 		}
 	} else {
 		// 追加条目
 	}
+	reply.Term = rf.currentTerm
 }
 
 //
