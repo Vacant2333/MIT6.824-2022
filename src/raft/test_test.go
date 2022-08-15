@@ -19,6 +19,7 @@ import "sync"
 // (much more than the paper's range of timeouts).
 const RaftElectionTimeout = 1000 * time.Millisecond
 
+// 2A.1
 func TestInitialElection2A(t *testing.T) {
 	servers := 3
 	cfg := make_config(t, servers, false, false)
@@ -50,6 +51,7 @@ func TestInitialElection2A(t *testing.T) {
 	cfg.end()
 }
 
+// 2A.2
 func TestReElection2A(t *testing.T) {
 	servers := 3
 	cfg := make_config(t, servers, false, false)
@@ -90,6 +92,7 @@ func TestReElection2A(t *testing.T) {
 	cfg.end()
 }
 
+// 2A.3
 func TestManyElections2A(t *testing.T) {
 	servers := 7
 	cfg := make_config(t, servers, false, false)
@@ -101,6 +104,7 @@ func TestManyElections2A(t *testing.T) {
 
 	iters := 10
 	for ii := 1; ii < iters; ii++ {
+		fmt.Printf("2A.3 test round[%v] start\n", ii)
 		// disconnect three nodes
 		i1 := rand.Int() % servers
 		i2 := rand.Int() % servers

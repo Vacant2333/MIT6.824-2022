@@ -206,7 +206,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	defer rf.mu.Unlock()
 	// 如果sender的term大于receiver,更新receiver的term和role
 	if args.Term > rf.currentTerm {
-		fmt.Printf("server[%v] trans to Follower by server[%v]\n", rf.me, args.CandidateId)
+		fmt.Printf("server[%v] trans to Follower by server[%v] when RequestVote\n", rf.me, args.CandidateId)
 		rf.currentTerm = args.Term
 		rf.role = Follower
 		rf.votedFor = -1
@@ -417,16 +417,17 @@ func (rf *Raft) imLeader() {
 	for rf.killed() == false {
 		rf.mu.Lock()
 		if rf.role != Leader {
+			// 如果现在不是Leader,停止发送心跳包
 			fmt.Printf("server[%v] is not a leader now!\n", rf.me)
 			rf.mu.Unlock()
 			return
 		}
+		rf.mu.Unlock()
 		for server := 0; server < len(rf.peers); server++ {
 			if server != rf.me {
 				go rf.sendHeartBeat(server)
 			}
 		}
-		rf.mu.Unlock()
 		time.Sleep(HeartBeatSendTime)
 	}
 }
