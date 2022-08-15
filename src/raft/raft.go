@@ -209,12 +209,15 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		fmt.Printf("server[%v] trans to Follower by server[%v]\n", rf.me, args.CandidateId)
 		rf.currentTerm = args.Term
 		rf.role = Follower
+		rf.votedFor = -1
 		rf.heartBeatTimeOut = time.Now().Add(getRandElectionTimeOut())
 	}
 	// 是否投票给他
 	if args.Term >= rf.currentTerm && (rf.votedFor == -1 || rf.votedFor == args.CandidateId) {
 		reply.VoteGranted = true
 		rf.votedFor = args.CandidateId
+	} else {
+		fmt.Printf("server[%v] reject vote to [%v],role:%v votedFor:%v\n", rf.me, args.CandidateId, rf.role, rf.votedFor)
 	}
 	reply.Term = rf.currentTerm
 	// 2A end
@@ -388,8 +391,8 @@ func (rf *Raft) collectVotes() {
 		ok := rf.sendRequestVote(server, args, reply)
 		if ok && reply.VoteGranted {
 			rf.mu.Lock()
-			fmt.Printf("server[%v] get a vote from server[%v]\n", rf.me, server)
 			rf.voteCount += 1
+			fmt.Printf("server[%v] get a vote from server[%v], voteCount:[%v/%v]\n", rf.me, server, rf.voteCount, len(rf.peers))
 			rf.mu.Unlock()
 		}
 	}
@@ -469,7 +472,7 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 			// 更新心跳包超时时间
 			rf.role = Follower
 			rf.heartBeatTimeOut = time.Now().Add(getRandElectionTimeOut())
-			fmt.Printf("server[%v] get a heartbeat pack\n", rf.me)
+			//fmt.Printf("server[%v] get a heartbeat pack\n", rf.me)
 		}
 	} else {
 		// 追加条目
