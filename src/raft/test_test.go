@@ -120,6 +120,7 @@ func TestManyElections2A(t *testing.T) {
 		cfg.connect(i1)
 		cfg.connect(i2)
 		cfg.connect(i3)
+
 	}
 
 	cfg.checkOneLeader()
@@ -620,7 +621,7 @@ loop:
 			cmds = append(cmds, x)
 			index1, term1, ok := cfg.rafts[leader].Start(x)
 			if term1 != term {
-				// Term changed while starting
+				// FollowerTerm changed while starting
 				continue loop
 			}
 			if !ok {
