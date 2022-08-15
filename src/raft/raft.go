@@ -62,8 +62,8 @@ const (
 	ElectionSleepTime = 15 * time.Millisecond  // 选举睡眠时间
 	HeartBeatSendTime = 100 * time.Millisecond // 心跳包发送时间 ms
 
-	ElectionTimeOutStart = 500 // 选举超时时间(也用于检查是否需要开始选举) 区间
-	ElectionTimeOutEnd   = 800
+	ElectionTimeOutStart = 300 // 选举超时时间(也用于检查是否需要开始选举) 区间
+	ElectionTimeOutEnd   = 520
 )
 
 // 获得一个随机选举超时时间
@@ -71,7 +71,7 @@ func getRandElectionTimeOut() time.Duration {
 	return time.Duration((rand.Int()%(ElectionTimeOutEnd-ElectionTimeOutStart))+ElectionTimeOutStart) * time.Millisecond
 }
 
-// 心跳包是否超时
+// 检查心跳包是否超时(heartBeatTimeOut是上次收到心跳包的时间+一个随机选举超时时间)
 func (rf *Raft) isHeartBeatTimeOut() bool {
 	return rf.heartBeatTimeOut.Before(time.Now())
 }
@@ -422,10 +422,12 @@ func (rf *Raft) imLeader() {
 			rf.mu.Unlock()
 			return
 		}
+		// 每次心跳包的args保持一致
+		heartBeatArgs := &AppendEnTriesArgs{rf.currentTerm, rf.me, true}
 		rf.mu.Unlock()
 		for server := 0; server < len(rf.peers); server++ {
 			if server != rf.me {
-				go rf.sendHeartBeat(server)
+				go rf.sendHeartBeat(server, heartBeatArgs)
 			}
 		}
 		time.Sleep(HeartBeatSendTime)
@@ -445,10 +447,10 @@ func (rf *Raft) resetVoteData(voteMe bool) {
 }
 
 // 发送心跳包
-func (rf *Raft) sendHeartBeat(server int) bool {
+func (rf *Raft) sendHeartBeat(server int, args *AppendEnTriesArgs) bool {
 	//rf.mu.Lock()
 	//defer rf.mu.Unlock()
-	args := &AppendEnTriesArgs{rf.currentTerm, rf.me, true}
+	//args := &AppendEnTriesArgs{rf.currentTerm, rf.me, true}
 	reply := &AppendEntriesReply{}
 	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
 	return ok && reply.Success
