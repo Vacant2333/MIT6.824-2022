@@ -75,7 +75,7 @@ func (rf *Raft) isHeartBeatTimeOut() bool {
 	return rf.heartBeatTimeOut.Before(time.Now())
 }
 
-//
+// Raft
 // A Go object implementing a single Raft peer.
 //
 type Raft struct {
@@ -98,7 +98,7 @@ type Raft struct {
 
 }
 
-// return currentTerm and whether this server
+// GetState return currentTerm and whether this server
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
 	var term int
@@ -108,7 +108,6 @@ func (rf *Raft) GetState() (int, bool) {
 	rf.mu.Lock()
 	term = rf.currentTerm
 	isleader = rf.role == Leader
-	//fmt.Println("get state", rf.me)
 	rf.mu.Unlock()
 	// 2A end
 	return term, isleader
@@ -256,7 +255,7 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 	return ok
 }
 
-//
+// Start
 // the service using Raft (e.g. a k/v server) wants to start
 // agreement on the next command to be appended to Raft's log. if this
 // server isn't the leader, returns false. otherwise start the
@@ -269,7 +268,7 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 // if it's ever committed. the second return value is the current
 // term. the third return value is true if this server believes it is
 // the leader.
-//
+// 用来存一条log
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	index := -1
 	term := -1
