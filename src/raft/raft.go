@@ -57,12 +57,12 @@ const (
 	Candidate = 2
 	Leader    = 3
 
-	TickerSleepTime   = 25 * time.Millisecond  // Ticker 睡眠时间 ms
-	ElectionSleepTime = 20 * time.Millisecond  // 选举睡眠时间
-	HeartBeatSendTime = 110 * time.Millisecond // 心跳包发送时间 ms
+	TickerSleepTime   = 15 * time.Millisecond  // Ticker 睡眠时间 ms
+	ElectionSleepTime = 18 * time.Millisecond  // 选举睡眠时间
+	HeartBeatSendTime = 100 * time.Millisecond // 心跳包发送时间 ms
 
-	ElectionTimeOutStart = 325 // 选举超时时间(也用于检查是否需要开始选举) 区间
-	ElectionTimeOutEnd   = 475
+	ElectionTimeOutStart = 250 // 选举超时时间(也用于检查是否需要开始选举) 区间
+	ElectionTimeOutEnd   = 450
 )
 
 // 获得一个随机选举超时时间
@@ -97,8 +97,8 @@ type Raft struct {
 	logs             []ApplyMsg // 日志条目;每个条目包含了用于状态机的命令,以及领导者接收到该条目时的任期(第一个索引为1)
 	commitIndex      int        // (所有服务器)日志中最后一条的log的下标(易失,初始为0)
 	lastAppliedIndex int        // (所有服务器)日志中被应用到状态机的最高一条的下标(易失,初始为0)
-	nextIndex        []int      // (only Leader)对于每台服务器,发送的下一条log的索引(初始为Leader的最大索引+1)
-	matchIndex       []int      // (only Leader)对于每台服务器,已知的已复制到该服务器的最高索引(默认为0,单调递增)
+	nextIndex        []int      // (only Leader,成为Leader后初始化)对于每台服务器,发送的下一条log的索引(初始为Leader的最大索引+1)
+	matchIndex       []int      // (only Leader,成为Leader后初始化)对于每台服务器,已知的已复制到该服务器的最高索引(默认为0,单调递增)
 	// 2B end
 }
 
@@ -392,11 +392,32 @@ func (rf *Raft) collectVotes() {
 	}
 }
 
-// 成为Leader,给所有人发送心跳包
+// 成为Leader
 func (rf *Raft) imLeader() {
 	rf.mu.Lock()
+	// 初始化Leader需要的内容
+	rf.nextIndex = make([]int, len(rf.peers))
+	rf.matchIndex = make([]int, len(rf.peers))
+	// 初始化nextIndex,存了每台服务器的下一条log的索引(初始为Leader的最大索引+1)
+	for server := 0; server < len(rf.peers); server++ {
+		rf.nextIndex[server] = rf.commitIndex + 1
+	}
 	rf.role = Leader
 	rf.mu.Unlock()
+	// 持续发送心跳包
+	go rf.sendHeartBeats()
+}
+
+// 持续发送心跳包给所有人
+func (rf *Raft) sendHeartBeats() {
+	// 发送单个心跳包
+	sendHeartBeat := func(server int, args *AppendEnTriesArgs) bool {
+		reply := &AppendEntriesReply{}
+		ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
+		return ok && reply.Success
+	}
+
+	// 发送心跳包,直到自己不为Leader
 	for rf.killed() == false {
 		rf.mu.Lock()
 		if rf.role != Leader {
@@ -408,9 +429,10 @@ func (rf *Raft) imLeader() {
 		// 每次心跳包的args保持一致
 		heartBeatArgs := &AppendEnTriesArgs{rf.currentTerm, rf.me, true}
 		rf.mu.Unlock()
+		// 给除了自己以外的服务器发送心跳包
 		for server := 0; server < len(rf.peers); server++ {
 			if server != rf.me {
-				go rf.sendHeartBeat(server, heartBeatArgs)
+				go sendHeartBeat(server, heartBeatArgs)
 			}
 		}
 		time.Sleep(HeartBeatSendTime)
@@ -427,13 +449,6 @@ func (rf *Raft) resetVoteData(voteMe bool) {
 		rf.votedFor = rf.me
 	}
 	rf.mu.Unlock()
-}
-
-// 发送心跳包
-func (rf *Raft) sendHeartBeat(server int, args *AppendEnTriesArgs) bool {
-	reply := &AppendEntriesReply{}
-	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
-	return ok && reply.Success
 }
 
 // AppendEnTriesArgs 心跳/追加包
@@ -502,6 +517,11 @@ func Make(peers []*labrpc.ClientEnd, me int, persister *Persister, applyCh chan 
 	rf.heartBeatTimeOut = time.Now().Add(getRandElectionTimeOut())
 	fmt.Printf("build s[%d] peer's count [%d]\n", rf.me, len(rf.peers))
 	// 2A end
+	// 2B start
+	rf.logs = make([]ApplyMsg, 0)
+	rf.commitIndex = 0
+	rf.lastAppliedIndex = 0
+	// 2B end
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 	// start ticker goroutine to start elections
