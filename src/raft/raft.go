@@ -61,8 +61,8 @@ const (
 	ElectionSleepTime = 20 * time.Millisecond  // 选举睡眠时间
 	HeartBeatSendTime = 110 * time.Millisecond // 心跳包发送时间 ms
 
-	ElectionTimeOutStart = 250 // 选举超时时间(也用于检查是否需要开始选举) 区间
-	ElectionTimeOutEnd   = 400
+	ElectionTimeOutStart = 325 // 选举超时时间(也用于检查是否需要开始选举) 区间
+	ElectionTimeOutEnd   = 475
 )
 
 // 获得一个随机选举超时时间
@@ -93,9 +93,13 @@ type Raft struct {
 	role             int       // 角色，follower, candidate, leader
 	heartBeatTimeOut time.Time // 上一次收到心跳包的时间+随机选举超时时间(在收到心跳包后再次随机一个)
 	// 2A end
-	// Look at the paper's Figure 2 for a description of what
-	// state a Raft server must maintain.
-
+	// 2B start
+	logs             []ApplyMsg // 日志条目;每个条目包含了用于状态机的命令,以及领导者接收到该条目时的任期(第一个索引为1)
+	commitIndex      int        // (所有服务器)日志中最后一条的log的下标(易失,初始为0)
+	lastAppliedIndex int        // (所有服务器)日志中被应用到状态机的最高一条的下标(易失,初始为0)
+	nextIndex        []int      // (only Leader)对于每台服务器,发送的下一条log的索引(初始为Leader的最大索引+1)
+	matchIndex       []int      // (only Leader)对于每台服务器,已知的已复制到该服务器的最高索引(默认为0,单调递增)
+	// 2B end
 }
 
 // GetState return currentTerm and whether this server
@@ -204,7 +208,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	defer rf.mu.Unlock()
 	// 如果sender的term大于receiver,更新receiver的term和role
 	if args.CandidateTerm > rf.currentTerm {
-		fmt.Printf("server[%v] trans to Follower by server[%v] when RequestVote\n", rf.me, args.CandidateId)
+		fmt.Printf("s[%v] trans to Follower by s[%v] when RequestVote\n", rf.me, args.CandidateId)
 		rf.currentTerm = args.CandidateTerm
 		rf.role = Follower
 		rf.votedFor = -1
@@ -215,7 +219,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		reply.VoteGranted = true
 		rf.votedFor = args.CandidateId
 	} else {
-		fmt.Printf("server[%v] reject vote to [%v],role:%v votedFor:%v\n", rf.me, args.CandidateId, rf.role, rf.votedFor)
+		fmt.Printf("s[%v] reject vote for [%v],role:%v votedFor:%v\n", rf.me, args.CandidateId, rf.role, rf.votedFor)
 	}
 	reply.FollowerTerm = rf.currentTerm
 	// 2A end
@@ -295,7 +299,7 @@ func (rf *Raft) Kill() {
 	// Your code here, if desired.
 	// 如果测试程序把这台机器kill了
 	rf.mu.Lock()
-	fmt.Printf("server[%v] dead now,role:%v\n", rf.me, rf.role)
+	fmt.Printf("s[%v] dead now,role:%v\n", rf.me, rf.role)
 	rf.mu.Unlock()
 }
 
@@ -320,24 +324,12 @@ func (rf *Raft) ticker() {
 	}
 }
 
-// AppendEnTriesArgs 心跳/追加包
-type AppendEnTriesArgs struct {
-	LeaderTerm  int  // leader's term
-	LeaderId    int  // leader's index
-	IsHeartBeat bool // 心跳包
-}
-
-type AppendEntriesReply struct {
-	FollowerTerm int // follower's term,for leader to update its term
-	Success      bool
-}
-
 // 开始一场选举
 func (rf *Raft) startElection() {
 	// 初始化投票数据
 	rf.resetVoteData(true)
 	rf.mu.Lock()
-	fmt.Printf("server[%v] start the election now!\n", rf.me)
+	fmt.Printf("s[%v] start the election now!\n", rf.me)
 	rf.currentTerm += 1
 	rf.role = Candidate
 	// 选举超时时间
@@ -350,7 +342,7 @@ func (rf *Raft) startElection() {
 		rf.mu.Lock()
 		if rf.voteCount > len(rf.peers)/2 {
 			// 1.赢得了大部分选票
-			fmt.Printf("server[%v] is Leader now!\n", rf.me)
+			fmt.Printf("s[%v] is Leader now!\n", rf.me)
 			rf.mu.Unlock()
 			rf.resetVoteData(false)
 			go rf.imLeader()
@@ -358,14 +350,14 @@ func (rf *Raft) startElection() {
 		}
 		if rf.role == Follower {
 			// 2.其他人成为了Leader
-			fmt.Printf("server[%v] another server is Leader now\n", rf.me)
+			fmt.Printf("s[%v] another server is Leader now\n", rf.me)
 			rf.mu.Unlock()
 			rf.resetVoteData(false)
 			return
 		}
 		if electionTimeOut.Before(time.Now()) {
 			// 3.选举超时,重新开始选举
-			fmt.Printf("server[%v] election time out!\n", rf.me)
+			fmt.Printf("s[%v] election time out!\n", rf.me)
 			rf.mu.Unlock()
 			go rf.startElection()
 			return
@@ -383,7 +375,7 @@ func (rf *Raft) collectVotes() {
 		if ok && reply.VoteGranted {
 			rf.mu.Lock()
 			rf.voteCount += 1
-			fmt.Printf("server[%v] get a vote from server[%v], voteCount:[%v/%v]\n", rf.me, server, rf.voteCount, len(rf.peers))
+			fmt.Printf("s[%v] get a vote from s[%v], voteCount:[%v/%v]\n", rf.me, server, rf.voteCount, len(rf.peers))
 			rf.mu.Unlock()
 		}
 	}
@@ -409,7 +401,7 @@ func (rf *Raft) imLeader() {
 		rf.mu.Lock()
 		if rf.role != Leader {
 			// 如果现在不是Leader,停止发送心跳包
-			fmt.Printf("server[%v] is not a leader now!\n", rf.me)
+			fmt.Printf("s[%v] is not a leader now!\n", rf.me)
 			rf.mu.Unlock()
 			return
 		}
@@ -444,6 +436,18 @@ func (rf *Raft) sendHeartBeat(server int, args *AppendEnTriesArgs) bool {
 	return ok && reply.Success
 }
 
+// AppendEnTriesArgs 心跳/追加包
+type AppendEnTriesArgs struct {
+	LeaderTerm  int  // leader's term
+	LeaderId    int  // leader's index
+	IsHeartBeat bool // 心跳包
+}
+
+type AppendEntriesReply struct {
+	FollowerTerm int // follower's term,for leader to update its term
+	Success      bool
+}
+
 // AppendEntries follower 接收追加/心跳包
 func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply) {
 	// 收到了来自某个Leader的心跳包,清空投票记录
@@ -454,22 +458,24 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 	if args.LeaderTerm > rf.currentTerm {
 		rf.role = Follower
 		rf.currentTerm = args.LeaderTerm
-		fmt.Printf("server[%v] trans to Follower by server[%v] when AppendEntries\n", rf.me, args.LeaderId)
+		fmt.Printf("s[%v] trans to Follower by s[%v] when AppendEntries\n", rf.me, args.LeaderId)
 	}
+	reply.FollowerTerm = rf.currentTerm
 	if args.IsHeartBeat {
 		// 处理心跳包
 		if args.LeaderTerm < rf.currentTerm {
 			reply.Success = false
+			return
 		} else {
 			reply.Success = true
 			// 更新心跳包超时时间
 			rf.role = Follower
 			rf.heartBeatTimeOut = time.Now().Add(getRandElectionTimeOut())
+			return
 		}
 	} else {
 		// 追加条目
 	}
-	reply.FollowerTerm = rf.currentTerm
 }
 
 //
@@ -494,7 +500,7 @@ func Make(peers []*labrpc.ClientEnd, me int, persister *Persister, applyCh chan 
 	rf.votedFor = -1
 	rf.role = Follower
 	rf.heartBeatTimeOut = time.Now().Add(getRandElectionTimeOut())
-	fmt.Printf("build server[%d] peer's count [%d]\n", rf.me, len(rf.peers))
+	fmt.Printf("build s[%d] peer's count [%d]\n", rf.me, len(rf.peers))
 	// 2A end
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())

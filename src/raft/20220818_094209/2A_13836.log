@@ -1,0 +1,199 @@
+build s[0] peer's count [3]
+build s[1] peer's count [3]
+build s[2] peer's count [3]
+Test (2A): initial election ...
+s[1] start the election now!
+s[0] trans to Follower by s[1] when RequestVote
+s[2] trans to Follower by s[1] when RequestVote
+s[1] get a vote from s[0], voteCount:[2/3]
+s[1] get a vote from s[2], voteCount:[3/3]
+s[1] is Leader now!
+  ... Passed --   3.1  3   50    7776    0
+s[0] dead now,role:1
+s[1] dead now,role:3
+s[2] dead now,role:1
+build s[0] peer's count [3]
+build s[1] peer's count [3]
+build s[2] peer's count [3]
+Test (2A): election after network failure ...
+s[0] start the election now!
+s[1] trans to Follower by s[0] when RequestVote
+s[2] trans to Follower by s[0] when RequestVote
+s[0] get a vote from s[1], voteCount:[2/3]
+s[0] get a vote from s[2], voteCount:[3/3]
+s[0] is Leader now!
+s[0] dead now,role:3
+s[1] dead now,role:1
+s[2] dead now,role:1
+--- FAIL: TestReElection2A (5.42s)
+    config.go:461: expected one leader, got none
+build s[0] peer's count [7]
+build s[1] peer's count [7]
+build s[2] peer's count [7]
+build s[3] peer's count [7]
+build s[4] peer's count [7]
+build s[5] peer's count [7]
+build s[6] peer's count [7]
+Test (2A): multiple elections ...
+s[0] start the election now!
+s[1] start the election now!
+s[2] start the election now!
+s[0] reject vote for [1],role:2 votedFor:0
+s[6] trans to Follower by s[0] when RequestVote
+s[4] trans to Follower by s[1] when RequestVote
+s[6] reject vote for [1],role:1 votedFor:0
+s[3] trans to Follower by s[2] when RequestVote
+s[3] reject vote for [1],role:1 votedFor:2
+s[2] get a vote from s[3], voteCount:[2/7]
+s[4] reject vote for [2],role:1 votedFor:1
+s[0] get a vote from s[6], voteCount:[2/7]
+s[5] trans to Follower by s[0] when RequestVote
+s[4] reject vote for [0],role:1 votedFor:1
+s[5] reject vote for [1],role:1 votedFor:0
+s[3] reject vote for [0],role:1 votedFor:2
+s[0] get a vote from s[5], voteCount:[3/7]
+s[1] reject vote for [0],role:2 votedFor:1
+s[2] reject vote for [0],role:2 votedFor:2
+s[2] reject vote for [1],role:2 votedFor:2
+s[0] reject vote for [2],role:2 votedFor:0
+s[6] reject vote for [2],role:1 votedFor:0
+s[5] reject vote for [2],role:1 votedFor:0
+s[1] get a vote from s[4], voteCount:[2/7]
+s[1] reject vote for [2],role:2 votedFor:1
+s[1] election time out!
+s[1] start the election now!
+s[0] trans to Follower by s[1] when RequestVote
+s[3] trans to Follower by s[1] when RequestVote
+s[2] trans to Follower by s[1] when RequestVote
+s[5] trans to Follower by s[1] when RequestVote
+s[1] get a vote from s[0], voteCount:[2/7]
+s[6] trans to Follower by s[1] when RequestVote
+s[1] get a vote from s[2], voteCount:[3/7]
+s[1] get a vote from s[5], voteCount:[4/7]
+s[1] get a vote from s[3], voteCount:[5/7]
+s[1] get a vote from s[6], voteCount:[6/7]
+s[4] trans to Follower by s[1] when RequestVote
+s[1] get a vote from s[4], voteCount:[7/7]
+s[0] another server is Leader now
+s[2] another server is Leader now
+s[1] is Leader now!
+2A.3 test round[1] start
+s[2] start the election now!
+s[0] start the election now!
+2A.3 test round[2] start
+s[2] election time out!
+s[2] start the election now!
+s[4] start the election now!
+s[0] election time out!
+s[0] start the election now!
+2A.3 test round[3] start
+s[4] election time out!
+s[4] start the election now!
+s[2] election time out!
+s[2] start the election now!
+s[0] trans to Follower by s[2] when RequestVote
+s[1] trans to Follower by s[2] when RequestVote
+s[6] trans to Follower by s[2] when RequestVote
+s[2] get a vote from s[0], voteCount:[2/7]
+s[2] get a vote from s[1], voteCount:[3/7]
+s[2] get a vote from s[6], voteCount:[4/7]
+s[1] is not a leader now!
+s[0] another server is Leader now
+s[2] is Leader now!
+s[3] start the election now!
+s[5] start the election now!
+2A.3 test round[4] start
+s[3] trans to Follower by s[2] when AppendEntries
+s[5] trans to Follower by s[2] when AppendEntries
+s[5] another server is Leader now
+s[3] another server is Leader now
+s[4] election time out!
+s[4] start the election now!
+s[4] election time out!
+s[4] start the election now!
+2A.3 test round[5] start
+s[4] election time out!
+s[4] start the election now!
+s[5] start the election now!
+s[0] start the election now!
+2A.3 test round[6] start
+s[1] start the election now!
+s[6] start the election now!
+s[4] election time out!
+s[4] start the election now!
+s[3] trans to Follower by s[4] when RequestVote
+s[2] trans to Follower by s[4] when RequestVote
+s[5] trans to Follower by s[4] when RequestVote
+s[4] get a vote from s[3], voteCount:[2/7]
+s[4] get a vote from s[5], voteCount:[3/7]
+s[4] get a vote from s[2], voteCount:[4/7]
+s[5] another server is Leader now
+s[4] is Leader now!
+s[2] is not a leader now!
+s[0] election time out!
+s[0] start the election now!
+2A.3 test round[7] start
+s[1] election time out!
+s[1] start the election now!
+s[0] reject vote for [1],role:2 votedFor:0
+s[5] reject vote for [1],role:1 votedFor:-1
+s[6] trans to Follower by s[1] when RequestVote
+s[1] get a vote from s[6], voteCount:[2/7]
+s[6] another server is Leader now
+s[3] start the election now!
+s[2] start the election now!
+s[0] election time out!
+s[0] start the election now!
+s[1] trans to Follower by s[0] when RequestVote
+s[6] trans to Follower by s[0] when RequestVote
+s[0] get a vote from s[1], voteCount:[2/7]
+s[0] get a vote from s[5], voteCount:[3/7]
+s[0] get a vote from s[6], voteCount:[4/7]
+s[1] another server is Leader now
+s[0] is Leader now!
+2A.3 test round[8] start
+s[4] is not a leader now!
+s[3] election time out!
+s[3] start the election now!
+s[0] trans to Follower by s[3] when RequestVote
+s[4] trans to Follower by s[3] when RequestVote
+s[5] trans to Follower by s[3] when RequestVote
+s[3] get a vote from s[0], voteCount:[2/7]
+s[3] get a vote from s[5], voteCount:[3/7]
+s[3] get a vote from s[4], voteCount:[4/7]
+s[6] trans to Follower by s[3] when RequestVote
+s[3] get a vote from s[6], voteCount:[5/7]
+s[2] election time out!
+s[2] start the election now!
+s[3] is Leader now!
+s[0] is not a leader now!
+s[1] start the election now!
+2A.3 test round[9] start
+s[2] election time out!
+s[2] start the election now!
+s[0] trans to Follower by s[2] when RequestVote
+s[5] trans to Follower by s[2] when RequestVote
+s[2] get a vote from s[0], voteCount:[2/7]
+s[2] get a vote from s[5], voteCount:[3/7]
+s[6] trans to Follower by s[2] when RequestVote
+s[2] get a vote from s[6], voteCount:[4/7]
+s[2] is Leader now!
+s[1] election time out!
+s[1] start the election now!
+s[4] start the election now!
+s[1] trans to Follower by s[2] when AppendEntries
+s[3] trans to Follower by s[2] when AppendEntries
+s[1] another server is Leader now
+s[4] another server is Leader now
+s[3] is not a leader now!
+  ... Passed --   6.0  7  522   58208    0
+s[0] dead now,role:1
+s[1] dead now,role:1
+s[2] dead now,role:3
+s[3] dead now,role:1
+s[4] dead now,role:1
+s[5] dead now,role:1
+s[6] dead now,role:1
+FAIL
+exit status 1
+FAIL	mit6.824/raft	14.580s
