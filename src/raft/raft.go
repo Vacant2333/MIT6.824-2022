@@ -369,20 +369,11 @@ func (rf *Raft) startElection() {
 
 // 向所有peers收集选票
 func (rf *Raft) collectVotes() {
-	// 收集选票
+	// 收集单个选票
 	askVote := func(server int, args *RequestVoteArgs, reply *RequestVoteReply) {
 		ok := rf.sendRequestVote(server, args, reply)
 		rf.mu.Lock()
 		defer rf.mu.Unlock()
-		// 如果Follower的term大于candidate就变成follower
-		/*
-			if reply.FollowerTerm > args.CandidateTerm {
-				rf.role = Follower
-				rf.resetVoteData(false)
-				time.Sleep(getRandElectionTimeOut() / 7)
-				fmt.Printf("s[%v] trans to Follower because s[%v]'s term bigger", rf.me, server)
-			}
-		*/
 		// 检查投票
 		if ok && reply.VoteGranted {
 			rf.voteCount += 1
