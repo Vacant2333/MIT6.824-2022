@@ -61,8 +61,8 @@ const (
 	ElectionSleepTime = 18 * time.Millisecond  // 选举睡眠时间
 	HeartBeatSendTime = 100 * time.Millisecond // 心跳包发送时间 ms
 
-	ElectionTimeOutStart = 250 // 选举超时时间(也用于检查是否需要开始选举) 区间
-	ElectionTimeOutEnd   = 450
+	ElectionTimeOutStart = 200 // 选举超时时间(也用于检查是否需要开始选举) 区间
+	ElectionTimeOutEnd   = 500
 )
 
 // 获得一个随机选举超时时间
@@ -372,11 +372,21 @@ func (rf *Raft) collectVotes() {
 	// 收集选票
 	askVote := func(server int, args *RequestVoteArgs, reply *RequestVoteReply) {
 		ok := rf.sendRequestVote(server, args, reply)
+		rf.mu.Lock()
+		defer rf.mu.Unlock()
+		// 如果Follower的term大于candidate就变成follower
+		/*
+			if reply.FollowerTerm > args.CandidateTerm {
+				rf.role = Follower
+				rf.resetVoteData(false)
+				time.Sleep(getRandElectionTimeOut() / 7)
+				fmt.Printf("s[%v] trans to Follower because s[%v]'s term bigger", rf.me, server)
+			}
+		*/
+		// 检查投票
 		if ok && reply.VoteGranted {
-			rf.mu.Lock()
 			rf.voteCount += 1
 			fmt.Printf("s[%v] get a vote from s[%v], voteCount:[%v/%v]\n", rf.me, server, rf.voteCount, len(rf.peers))
-			rf.mu.Unlock()
 		}
 	}
 	rf.mu.Lock()
