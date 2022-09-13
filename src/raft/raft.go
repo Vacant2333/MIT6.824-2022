@@ -43,6 +43,7 @@ type ApplyMsg struct {
 	CommandValid bool
 	Command      interface{}
 	CommandIndex int
+	CommandTerm  int // 2B: 指令的任期
 
 	// For 2D:
 	SnapshotValid bool
@@ -51,7 +52,7 @@ type ApplyMsg struct {
 	SnapshotIndex int
 }
 
-// role is follower, candidate, or leader.
+// Role is Follower, Candidate, or Leader.
 const (
 	Follower  = 1
 	Candidate = 2
@@ -89,7 +90,7 @@ type Raft struct {
 	// 2A start
 	currentTerm      int       // 当前任期
 	votedFor         int       // 当前投票给的用户
-	voteCount        int       // 当前得票数量(默认为1)
+	voteCount        int       // 当前得票数量(默认为0)
 	role             int       // 角色， Follower, Candidate, Leader
 	heartBeatTimeOut time.Time // 上一次收到心跳包的时间+随机选举超时时间(在收到心跳包后再次随机一个)
 	// 2A end
@@ -99,6 +100,7 @@ type Raft struct {
 	lastAppliedIndex int        // (所有服务器)日志中被应用到状态机的最高一条的下标(易失,初始为0)
 	nextIndex        []int      // (only Leader,成为Leader后初始化)对于每台服务器,发送的下一条log的索引(初始为Leader的最大索引+1)
 	matchIndex       []int      // (only Leader,成为Leader后初始化)对于每台服务器,已知的已复制到该服务器的最高索引(默认为0,单调递增)
+	leaderIndex      int        // Leader的index,用来重定向Start方法
 	// 2B end
 }
 
@@ -206,6 +208,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// 2A start
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	rf.leaderIndex = -1
 	// 如果sender的term大于receiver,更新receiver的term和role
 	if args.CandidateTerm > rf.currentTerm {
 		fmt.Printf("s[%v] trans to Follower by s[%v] when RequestVote\n", rf.me, args.CandidateId)
@@ -331,6 +334,7 @@ func (rf *Raft) startElection() {
 	rf.mu.Lock()
 	fmt.Printf("s[%v] start the election now!\n", rf.me)
 	rf.currentTerm += 1
+	rf.leaderIndex = -1
 	rf.role = Candidate
 	// 选举超时时间
 	electionTimeOut := time.Now().Add(getRandElectionTimeOut())
@@ -396,9 +400,11 @@ func (rf *Raft) collectVotes() {
 // 成为Leader
 func (rf *Raft) imLeader() {
 	rf.mu.Lock()
+	rf.leaderIndex = rf.me
 	// 初始化Leader需要的内容
 	rf.nextIndex = make([]int, len(rf.peers))
 	rf.matchIndex = make([]int, len(rf.peers))
+	// todo:next index,match index
 	// 初始化nextIndex,存了每台服务器的下一条log的索引(初始为Leader的最大索引+1)
 	for server := 0; server < len(rf.peers); server++ {
 		rf.nextIndex[server] = rf.commitIndex + 1
@@ -409,15 +415,19 @@ func (rf *Raft) imLeader() {
 	go rf.sendHeartBeats()
 }
 
+// 生成一个心跳包
+func buildHeartBeatPack(currentTerm int, leaderID int) *AppendEnTriesArgs {
+	return &AppendEnTriesArgs{currentTerm, leaderID, 0, 0, nil, 0}
+}
+
 // 持续发送心跳包给所有人
 func (rf *Raft) sendHeartBeats() {
-	// 发送单个心跳包
+	// func : 发送单个心跳包
 	sendHeartBeat := func(server int, args *AppendEnTriesArgs) bool {
 		reply := &AppendEntriesReply{}
 		ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
 		return ok && reply.Success
 	}
-
 	// 发送心跳包,直到自己不为Leader
 	for rf.killed() == false {
 		rf.mu.Lock()
@@ -428,7 +438,7 @@ func (rf *Raft) sendHeartBeats() {
 			return
 		}
 		// 每次心跳包的args保持一致
-		heartBeatArgs := &AppendEnTriesArgs{rf.currentTerm, rf.me, nil, 0}
+		heartBeatArgs := buildHeartBeatPack(rf.currentTerm, rf.me)
 		rf.mu.Unlock()
 		// 给除了自己以外的服务器发送心跳包
 		for server := 0; server < len(rf.peers); server++ {
@@ -440,7 +450,7 @@ func (rf *Raft) sendHeartBeats() {
 	}
 }
 
-// 重置投票信息
+// 重置投票信息, voteMe: true则给自己投票
 func (rf *Raft) resetVoteData(voteMe bool) {
 	rf.mu.Lock()
 	rf.voteCount = 0
@@ -458,13 +468,11 @@ type AppendEnTriesArgs struct {
 	LeaderId   int // Leader's index
 	// IsHeartBeat bool // 是否为心跳包
 	// 2B start
+	PrevLogIndex int        // 新日志条目之前的日志的索引
+	PrevLogTerm  int        // 新日志之前的日志的任期
 	Logs         []ApplyMsg // 需要被保存的日志条目
 	LeaderCommit int        // Leader已提交的最高的日志项目的索引
 	// 2B end
-	/*
-		prevLogIndex int          // 新日志条目之前的日志的索引
-		prevLogTerm  int          // 新日志之前的日志的任期
-	*/
 }
 
 type AppendEntriesReply struct {
@@ -482,7 +490,7 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 	if args.LeaderTerm > rf.currentTerm {
 		rf.role = Follower
 		rf.currentTerm = args.LeaderTerm
-		fmt.Printf("s[%v] trans to Follower by s[%v] when AppendEntries\n", rf.me, args.LeaderId)
+		fmt.Printf("s[%v] trans to Follower by s[%v] when receive AppendEntries\n", rf.me, args.LeaderId)
 	}
 	reply.FollowerTerm = rf.currentTerm
 	if args.Logs == nil {
@@ -492,6 +500,7 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 			return
 		} else {
 			reply.Success = true
+			rf.leaderIndex = args.LeaderId
 			// 更新心跳包超时时间
 			rf.role = Follower
 			rf.heartBeatTimeOut = time.Now().Add(getRandElectionTimeOut())
@@ -523,6 +532,7 @@ func Make(peers []*labrpc.ClientEnd, me int, persister *Persister, applyCh chan 
 	rf.currentTerm = 0
 	rf.votedFor = -1
 	rf.role = Follower
+	rf.leaderIndex = -1
 	rf.heartBeatTimeOut = time.Now().Add(getRandElectionTimeOut())
 	fmt.Printf("build s[%d] peer's count [%d]\n", rf.me, len(rf.peers))
 	// 2A end
