@@ -62,7 +62,7 @@ const (
 	HeartBeatSendTime = 100 * time.Millisecond // 心跳包发送时间 ms
 
 	ElectionTimeOutStart = 200 // 选举超时时间(也用于检查是否需要开始选举) 区间
-	ElectionTimeOutEnd   = 500
+	ElectionTimeOutEnd   = 550
 )
 
 // 获得一个随机选举超时时间
@@ -90,7 +90,7 @@ type Raft struct {
 	currentTerm      int       // 当前任期
 	votedFor         int       // 当前投票给的用户
 	voteCount        int       // 当前得票数量(默认为1)
-	role             int       // 角色，follower, candidate, leader
+	role             int       // 角色， Follower, Candidate, Leader
 	heartBeatTimeOut time.Time // 上一次收到心跳包的时间+随机选举超时时间(在收到心跳包后再次随机一个)
 	// 2A end
 	// 2B start
