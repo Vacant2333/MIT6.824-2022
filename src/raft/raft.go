@@ -272,7 +272,7 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 // if it's ever committed. the second return value is the current
 // term. the third return value is true if this server believes it is
 // the leader.
-// 用来存一条log
+// 接受一条来自客户端的Log
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	index := -1
 	term := -1
@@ -428,7 +428,7 @@ func (rf *Raft) sendHeartBeats() {
 			return
 		}
 		// 每次心跳包的args保持一致
-		heartBeatArgs := &AppendEnTriesArgs{rf.currentTerm, rf.me, true}
+		heartBeatArgs := &AppendEnTriesArgs{rf.currentTerm, rf.me, nil, 0}
 		rf.mu.Unlock()
 		// 给除了自己以外的服务器发送心跳包
 		for server := 0; server < len(rf.peers); server++ {
@@ -454,13 +454,21 @@ func (rf *Raft) resetVoteData(voteMe bool) {
 
 // AppendEnTriesArgs 心跳/追加包
 type AppendEnTriesArgs struct {
-	LeaderTerm  int  // leader's term
-	LeaderId    int  // leader's index
-	IsHeartBeat bool // 心跳包
+	LeaderTerm int // Leader's term
+	LeaderId   int // Leader's index
+	// IsHeartBeat bool // 是否为心跳包
+	// 2B start
+	Logs         []ApplyMsg // 需要被保存的日志条目
+	LeaderCommit int        // Leader已提交的最高的日志项目的索引
+	// 2B end
+	/*
+		prevLogIndex int          // 新日志条目之前的日志的索引
+		prevLogTerm  int          // 新日志之前的日志的任期
+	*/
 }
 
 type AppendEntriesReply struct {
-	FollowerTerm int // follower's term,for leader to update its term
+	FollowerTerm int // Follower's term,for leader to update its term
 	Success      bool
 }
 
@@ -477,7 +485,7 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 		fmt.Printf("s[%v] trans to Follower by s[%v] when AppendEntries\n", rf.me, args.LeaderId)
 	}
 	reply.FollowerTerm = rf.currentTerm
-	if args.IsHeartBeat {
+	if args.Logs == nil {
 		// 处理心跳包
 		if args.LeaderTerm < rf.currentTerm {
 			reply.Success = false
