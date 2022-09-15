@@ -302,7 +302,7 @@ func (rf *Raft) Kill() {
 	// Your code here, if desired.
 	// 如果测试程序把这台机器kill了
 	rf.mu.Lock()
-	fmt.Printf("s[%v] dead now,role:%v\n", rf.me, rf.role)
+	fmt.Printf("s[%v] dead now,role:%v, Leader:%v Term:%v\n", rf.me, rf.role, rf.leaderIndex, rf.currentTerm)
 	rf.mu.Unlock()
 }
 
@@ -480,7 +480,7 @@ type AppendEntriesReply struct {
 	Success      bool
 }
 
-// AppendEntries follower 接收追加/心跳包
+// AppendEntries Follower接收Leader的追加/心跳包
 func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply) {
 	// 收到了来自某个Leader的心跳包,清空投票记录
 	rf.resetVoteData(false)
@@ -496,9 +496,11 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 	if args.Logs == nil {
 		// 处理心跳包
 		if args.LeaderTerm < rf.currentTerm {
+			// 不正常接受心跳包,Leader的Term小于Follower的Term
 			reply.Success = false
 			return
 		} else {
+			// 正常接受心跳包
 			reply.Success = true
 			rf.leaderIndex = args.LeaderId
 			// 更新心跳包超时时间
@@ -537,6 +539,7 @@ func Make(peers []*labrpc.ClientEnd, me int, persister *Persister, applyCh chan 
 	fmt.Printf("build s[%d] peer's count [%d]\n", rf.me, len(rf.peers))
 	// 2A end
 	// 2B start
+	// todo:applyCh
 	rf.logs = make([]ApplyMsg, 0)
 	rf.commitIndex = 0
 	rf.lastAppliedIndex = 0
