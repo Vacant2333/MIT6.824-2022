@@ -62,13 +62,13 @@ const (
 	ElectionSleepTime = 18 * time.Millisecond  // 选举睡眠时间
 	HeartBeatSendTime = 100 * time.Millisecond // 心跳包发送时间 ms
 
-	ElectionTimeOutStart = 200 // 选举超时时间(也用于检查是否需要开始选举) 区间
-	ElectionTimeOutEnd   = 550
+	ElectionTimeOutMin = 200 // 选举超时时间(也用于检查是否需要开始选举) 区间
+	ElectionTimeOutMax = 500
 )
 
 // 获得一个随机选举超时时间
 func getRandElectionTimeOut() time.Duration {
-	return time.Duration((rand.Int()%(ElectionTimeOutEnd-ElectionTimeOutStart))+ElectionTimeOutStart) * time.Millisecond
+	return time.Duration((rand.Int()%(ElectionTimeOutMax-ElectionTimeOutMin))+ElectionTimeOutMin) * time.Millisecond
 }
 
 // 检查心跳包是否超时(heartBeatTimeOut是上次收到心跳包的时间+一个随机选举超时时间)
@@ -108,15 +108,15 @@ type Raft struct {
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
 	var term int
-	var isleader bool
+	var isLeader bool
 	// Your code here (2A).
 	// 2A start
 	rf.mu.Lock()
 	term = rf.currentTerm
-	isleader = rf.role == Leader
+	isLeader = rf.role == Leader
 	rf.mu.Unlock()
 	// 2A end
-	return term, isleader
+	return term, isLeader
 }
 
 //
