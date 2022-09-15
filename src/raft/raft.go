@@ -61,7 +61,7 @@ const (
 	TickerSleepTime   = 15 * time.Millisecond  // Ticker 睡眠时间 ms
 	ElectionSleepTime = 18 * time.Millisecond  // 选举睡眠时间
 	HeartBeatSendTime = 100 * time.Millisecond // 心跳包发送时间 ms
-	PushLogsTime      = 15 * time.Millisecond  // Leader推送Log的间隔时间
+	PushLogsTime      = 50 * time.Millisecond  // Leader推送Log的间隔时间
 
 	ElectionTimeOutMin = 200 // 选举超时时间(也用于检查是否需要开始选举) 区间
 	ElectionTimeOutMax = 500
@@ -103,7 +103,6 @@ type Raft struct {
 	leaderIndex      int           // Leader的index,用来重定向Start方法
 	nextIndex        []int         // (only Leader,成为Leader后初始化)对于每台服务器,发送的下一条log的索引(初始为Leader的最大索引+1)
 	matchIndex       []int         // (only Leader,成为Leader后初始化)对于每台服务器,已知的已复制到该服务器的最高索引(默认为0,单调递增)
-	pushLogs         [][]ApplyMsg  // (only Leader)对于每台服务器,要发送的Logs
 	// 2B end
 }
 
@@ -301,12 +300,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		log.CommandIndex = rf.commitIndex + 1
 		log.CommandTerm = rf.currentTerm
 		rf.commitIndex++
-		// 把log给到pushLogs,自动推送给他们
-		for server := 0; server < len(rf.pushLogs); server++ {
-			if server != rf.me {
-				rf.pushLogs[server] = append(rf.pushLogs[server], log)
-			}
-		}
+		rf.logs = append(rf.logs, log)
 		rf.mu.Unlock()
 	} else {
 		// 重定向给Leader处理
@@ -460,19 +454,13 @@ func (rf *Raft) imLeader() {
 	// 初始化Leader需要的内容
 	rf.nextIndex = make([]int, len(rf.peers))
 	rf.matchIndex = make([]int, len(rf.peers))
-	rf.pushLogs = make([][]ApplyMsg, len(rf.peers))
 	// 初始化nextIndex为Leader的最后条目索引+1
 	for server := 0; server < len(rf.peers); server++ {
 		rf.nextIndex[server] = len(rf.logs) + 1
 		if server != rf.me {
-			// 持续通过检查pushLogs给Follower发送新的Log
-			rf.pushLogs[server] = make([]ApplyMsg, 0)
+			// 持续通过检查matchIndex给Follower发送新的Log
 			go rf.pushLogsToFollower(server)
 		}
-	}
-	// 初始化nextIndex,存了每台服务器的下一条log的索引(初始为Leader的最大索引+1)
-	for server := 0; server < len(rf.peers); server++ {
-		rf.nextIndex[server] = rf.commitIndex + 1
 	}
 	rf.role = Leader
 	rf.mu.Unlock()
@@ -489,28 +477,30 @@ func (rf *Raft) pushLogsToFollower(server int) {
 			rf.mu.Unlock()
 			break
 		}
-		logs := rf.pushLogs[server]
-		logsCount := len(rf.pushLogs[server])
-		nextIndex := rf.nextIndex[server]
-		// 用于推送失败给Follower同步的Logs,去掉没推送的log
-		syncLogs := rf.logs[:len(rf.logs)-logsCount]
-		rf.mu.Unlock()
-		// 检查是否有log需要推送
-		if logsCount > 0 {
-			reply := rf.sendAppendEntries(logs, nextIndex, server)
-			if reply.Success == false {
-				// 推送失败,Follower的logs不同步,直接发送Leader的所有logs给它覆盖掉
-				rePushReply := rf.sendAppendEntries(syncLogs, 1, server)
-				if rePushReply.Success {
-					// 同步成功,如果失败可能是服务器挂了
-					// 同步成功后不修改nextIndex或者pushLogs,因为同步推送的log不包括最新的logs
-				}
-			} else {
+		if rf.matchIndex[server] != rf.nextIndex[server]-1 {
+			// match不匹配 需要同步
+			allLogs := rf.logs
+			rf.mu.Unlock()
+			syncReply := rf.sendAppendEntries(allLogs, 1, server)
+			if syncReply.Success == true {
+				// 同步成功,如果失败的话可能是断网之类的
+				rf.mu.Lock()
+				rf.nextIndex[server] = len(allLogs) + 1
+				rf.matchIndex[server] = len(allLogs)
+				fmt.Printf("sync[%v] match:[%v] next:[%v]\n", server, rf.matchIndex[server], rf.nextIndex[server])
+				rf.mu.Unlock()
+			}
+		} else if rf.nextIndex[server] <= rf.commitIndex {
+			// 这个Follower需要新的Log
+			nextIndex := rf.nextIndex[server]
+			appendLogs := rf.logs[nextIndex-1:]
+			rf.mu.Unlock()
+			appendReply := rf.sendAppendEntries(appendLogs, nextIndex, server)
+			if appendReply.Success == true {
 				// 推送成功
 				rf.mu.Lock()
-				rf.nextIndex[server] += logsCount
-				// 推送logs成功后删除在logsCount前面的log
-				rf.pushLogs[server] = rf.pushLogs[server][logsCount-1:]
+				rf.nextIndex[server] += len(appendLogs)
+				rf.matchIndex[server] += len(appendLogs)
 				rf.mu.Unlock()
 			}
 		}
@@ -617,18 +607,16 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 		reply.Success = false
 		return
 	}
-	if args.Logs == nil {
-		// Logs为空,处理心跳包
-		reply.Success = true
-		rf.leaderIndex = args.LeaderId
-		// 更新心跳包超时时间
-		rf.role = Follower
-		rf.heartBeatTimeOut = time.Now().Add(getRandElectionTimeOut())
-	} else {
+	// 不管Logs是不是空,都要当心跳包
+	rf.leaderIndex = args.LeaderId
+	// 更新心跳包超时时间
+	rf.role = Follower
+	rf.heartBeatTimeOut = time.Now().Add(getRandElectionTimeOut())
+	if args.Logs != nil {
 		// 处理追加条目
 		if args.PrevLogIndex != 0 {
 			// 正常追加条目,检查prev Index,Term
-			if rf.logs[args.PrevLogIndex].CommandTerm == args.PrevLogTerm {
+			if rf.logs[args.PrevLogIndex-1].CommandTerm == args.PrevLogTerm {
 				// 校验正常
 				rf.logs = append(rf.logs, args.Logs...)
 				rf.lastAppliedIndex = args.LeaderCommit
