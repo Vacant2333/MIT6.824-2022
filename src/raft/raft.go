@@ -66,7 +66,7 @@ const (
 	ElectionSleepTime    = 18 * time.Millisecond  // 选举睡眠时间
 	HeartBeatSendTime    = 100 * time.Millisecond // 心跳包发送时间
 	PushLogsTime         = 50 * time.Millisecond  // Leader推送Log的间隔时间
-	checkAppliedLogsTime = 50 * time.Millisecond  // Leader更新applied的间隔时间
+	checkAppliedLogsTime = 25 * time.Millisecond  // Leader更新applied的间隔时间
 
 	ElectionTimeOutMin = 200 // 选举超时时间(也用于检查是否需要开始选举) 区间
 	ElectionTimeOutMax = 500
@@ -296,18 +296,20 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	hasLeader := rf.leaderIndex != -1
 	//me := rf.me
 	rf.mu.Unlock()
-	fmt.Printf("start req!\n")
+	//fmt.Printf("start req!\n")
 	if isLeader {
 		// 自己处理
 		rf.mu.Lock()
 		fmt.Printf("s[%v] Leader get a Start request[%v], len:[%v]\n", rf.me, command, rf.commitIndex+1)
+		rf.commitIndex++
+
 		index = rf.commitIndex
 		term = rf.currentTerm
+
 		log := ApplyMsg{}
 		log.Command = command
-		log.CommandIndex = rf.commitIndex + 1
+		log.CommandIndex = rf.commitIndex
 		log.CommandTerm = rf.currentTerm
-		rf.commitIndex++
 		rf.logs = append(rf.logs, log)
 		rf.mu.Unlock()
 		fmt.Println(index, term, isLeader)
@@ -359,8 +361,9 @@ func (rf *Raft) Kill() {
 	// Your code here, if desired.
 	// 如果测试程序把这台机器kill了
 	rf.mu.Lock()
-	fmt.Printf("s[%v] dead now,role:%v, Leader:%v Term:%v\n", rf.me,
-		rf.role, rf.leaderIndex, rf.currentTerm)
+	fmt.Printf("s[%v] dead! role:[%v], Leader:[%v] Term:[%v] LAI:[%v]"+
+		" commitIndex:[%v] logsLen[%v]\n", rf.me, rf.role, rf.leaderIndex,
+		rf.currentTerm, rf.lastAppliedIndex, rf.commitIndex, len(rf.logs))
 	rf.mu.Unlock()
 }
 
@@ -403,6 +406,7 @@ func (rf *Raft) startElection() {
 	for rf.killed() == false {
 		rf.mu.Lock()
 		if rf.voteCount > len(rf.peers)/2 {
+			//fmt.Printf("lll %v %v\n", rf.voteCount, len(rf.peers)/2)
 			// 1.赢得了大部分选票
 			fmt.Printf("s[%v] is Leader now!\n", rf.me)
 			rf.mu.Unlock()
@@ -497,24 +501,51 @@ func (rf *Raft) checkAppliedLogs() {
 			}
 		}
 		rf.mu.Unlock()
-		if niceMatchCount >= (len(rf.peers) / 2) {
-			rf.updateLastAppliedIndex(rf.commitIndex)
+		if niceMatchCount > (len(rf.peers)/2) && rf.lastAppliedIndex < rf.commitIndex {
+			fmt.Printf("L[%v] update applied index to %v\n", rf.me, rf.commitIndex)
+			rf.updateLastAppliedIndex(rf.commitIndex, true)
 		}
 		time.Sleep(checkAppliedLogsTime)
 	}
 }
 
-// 更新自己的lastAppliedIndex
-func (rf *Raft) updateLastAppliedIndex(lastAppliedIndex int) {
+// 更新自己的lastAppliedIndex,也可顺带更新所有Follower的
+func (rf *Raft) updateLastAppliedIndex(lastAppliedIndex int, updateFollowers bool) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	if lastAppliedIndex > rf.lastAppliedIndex {
+	if lastAppliedIndex > rf.lastAppliedIndex && lastAppliedIndex <= rf.commitIndex {
+		fmt.Println()
 		for index := rf.lastAppliedIndex; index < lastAppliedIndex; index++ {
 			rf.logs[index].CommandValid = true
 			rf.applyCh <- rf.logs[index]
 		}
 		fmt.Printf("s[%v] lastAppliedIndex update [%v]->[%v]\n", rf.me, rf.lastAppliedIndex, lastAppliedIndex)
 		rf.lastAppliedIndex = lastAppliedIndex
+		fmt.Println(rf.lastAppliedIndex)
+		if updateFollowers {
+			// 更新Followers的lastAppliedIndex
+			// func : 发送单个更新包
+			sendUpdateAppliedPack := func(server int, args *AppendEnTriesArgs) bool {
+				reply := &AppendEntriesReply{}
+				ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
+				return ok && reply.Success
+			}
+			// 保证所有人接受的包一致
+			updateAppliedPackArgs := &AppendEnTriesArgs{rf.currentTerm, rf.me,
+				UpdateAppliedPack, -1, -1, nil,
+				rf.lastAppliedIndex}
+			// 给除了自己以外的发送更新包
+			//rf.mu.Unlock()
+			for server := 0; server < len(rf.peers); server++ {
+				if server != rf.me {
+					go sendUpdateAppliedPack(server, updateAppliedPackArgs)
+					fmt.Println(server)
+				}
+			}
+			//rf.mu.Lock()
+		}
+	} else {
+		fmt.Printf("F[%v] reject update appliedIndex to [%v], commitIndex:[%v]\n", rf.me, lastAppliedIndex, rf.commitIndex)
 	}
 }
 
@@ -544,6 +575,7 @@ func (rf *Raft) pushLogsToFollower(server int) {
 			}
 		} else if rf.nextIndex[server] <= rf.commitIndex {
 			// 这个Follower需要新的Log
+			fmt.Printf("s[%v] append logs, next:[%v]\n", server, rf.nextIndex[server])
 			nextIndex := rf.nextIndex[server]
 			appendLogs := rf.logs[nextIndex-1:]
 			rf.mu.Unlock()
@@ -577,12 +609,6 @@ func (rf *Raft) sendAppendEntries(logs []ApplyMsg, nextIndex int, server int) *A
 	return reply
 }
 
-// 生成一个心跳包
-func buildHeartBeatPack(currentTerm int, leaderID int) *AppendEnTriesArgs {
-	return &AppendEnTriesArgs{currentTerm, leaderID, HeartPack, 0,
-		0, nil, 0}
-}
-
 // 持续发送心跳包给所有人
 func (rf *Raft) sendHeartBeatToAll() {
 	// func : 发送单个心跳包
@@ -602,7 +628,9 @@ func (rf *Raft) sendHeartBeatToAll() {
 			return
 		}
 		// 每次心跳包的args保持一致
-		heartBeatArgs := buildHeartBeatPack(rf.currentTerm, rf.me)
+		heartBeatArgs := &AppendEnTriesArgs{rf.currentTerm, rf.me,
+			HeartPack, 0,
+			0, nil, 0}
 		rf.mu.Unlock()
 		// 给除了自己以外的服务器发送心跳包
 		for server := 0; server < len(rf.peers); server++ {
@@ -647,9 +675,6 @@ type AppendEntriesReply struct {
 
 // AppendEntries Follower接收Leader的追加/心跳包
 func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply) {
-	// 收到了来自某个Leader的心跳包,清空投票记录
-	// todo:修改顺序 defer
-	//rf.resetVoteData(false)
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	reply.FollowerTerm = rf.currentTerm
@@ -679,11 +704,6 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 			if rf.logs[args.PrevLogIndex-1].CommandTerm == args.PrevLogTerm {
 				// 校验正常
 				rf.logs = append(rf.logs, args.Logs...)
-				/*
-					rf.mu.Unlock()
-					rf.updateLastAppliedIndex(args.LeaderCommit)
-					rf.mu.Lock()
-				*/
 				fmt.Printf("%v %v\n", args.Logs, rf.me)
 				reply.Success = true
 			} else {
@@ -693,11 +713,13 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 		} else {
 			// 可能是第一条Log或者可能是同步包(包括Leader绝大部分的Logs),前一条log是0
 			rf.logs = args.Logs
-			rf.lastAppliedIndex = args.LeaderCommit
+			rf.commitIndex = len(args.Logs)
+			//rf.lastAppliedIndex = args.LeaderCommit
 			reply.Success = true
 		}
 	case UpdateAppliedPack:
-		go rf.updateLastAppliedIndex(args.LeaderCommit)
+		fmt.Println(args.LeaderCommit, rf.commitIndex)
+		go rf.updateLastAppliedIndex(args.LeaderCommit, false)
 	}
 }
 
