@@ -19,6 +19,7 @@ package raft
 
 import (
 	"fmt"
+	"math"
 	"math/rand"
 	//	"bytes"
 	"sync"
@@ -57,10 +58,6 @@ const (
 	Follower  = 1
 	Candidate = 2
 	Leader    = 3
-
-	HeartPack         = 1
-	AppendPack        = 2
-	UpdateAppliedPack = 3
 
 	TickerSleepTime      = 15 * time.Millisecond  // Ticker 睡眠时间
 	ElectionSleepTime    = 18 * time.Millisecond  // 选举睡眠时间
@@ -104,7 +101,7 @@ type Raft struct {
 	applyCh          chan ApplyMsg // 已提交的Log需要发送到这个Chan里
 	logs             []ApplyMsg    // 日志条目;每个条目包含了用于状态机的命令,以及领导者接收到该条目时的任期(第一个索引为1)
 	commitIndex      int           // 日志中最后一条的log的下标(易失,初始为0)
-	lastAppliedIndex int           // 日志中被应用到状态机的最高一条的下标(易失,初始为0)
+	lastAppliedIndex int           // 日志中被应用到状态机的最高一条的下标(易失,初始为0),用不到
 	leaderIndex      int           // Leader的index,用来重定向Start方法
 	nextIndex        []int         // (only Leader,成为Leader后初始化)对于每台服务器,发送的下一条log的索引(初始为Leader的最大索引+1)
 	matchIndex       []int         // (only Leader,成为Leader后初始化)对于每台服务器,已知的已复制到该服务器的最高索引(默认为0,单调递增)
@@ -293,56 +290,21 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.mu.Lock()
 	isLeader = rf.role == Leader
 	term = rf.currentTerm
-	hasLeader := rf.leaderIndex != -1
-	//me := rf.me
 	rf.mu.Unlock()
-	//fmt.Printf("start req!\n")
 	if isLeader {
-		// 自己处理
 		rf.mu.Lock()
 		fmt.Printf("s[%v] Leader get a Start request[%v], len:[%v]\n", rf.me, command, rf.commitIndex+1)
-		rf.commitIndex++
-
-		index = rf.commitIndex
+		index = len(rf.logs) + 1
 		term = rf.currentTerm
-
 		log := ApplyMsg{}
 		log.Command = command
-		log.CommandIndex = rf.commitIndex
-		log.CommandTerm = rf.currentTerm
+		log.CommandIndex = index
+		log.CommandTerm = term
 		rf.logs = append(rf.logs, log)
 		rf.mu.Unlock()
-		fmt.Println(index, term, isLeader)
-	} else if hasLeader {
-		// 重定向给Leader处理
-		//fmt.Printf("s[%v] get a Start request and redirect to Leader\n", me)
-		//index, term = rf.requestStart(command)
 	}
-	//fmt.Println(isLeader)
 	// 2B end
-
 	return index, term, isLeader
-}
-
-// RequestStartReply 重定向Start请求的回复
-type RequestStartReply struct {
-	Index int // 新增加的Log的Index
-	Term  int // Leader当前任期
-}
-
-// requestStart Follower重定向Start请求给Leader
-func (rf *Raft) requestStart(command interface{}) (int, int) {
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
-	reply := &RequestStartReply{-1, -1}
-	rf.peers[rf.leaderIndex].Call("Raft.RequestStart", &command, reply)
-	fmt.Printf("F[%v] redirect a Start request to Leader[%v]\n", rf.me, rf.leaderIndex)
-	return reply.Index, reply.Term
-}
-
-// RequestStart Leader接收Follower发来的Start重定向请求
-func (rf *Raft) RequestStart(command *interface{}, reply *RequestStartReply) {
-	reply.Index, reply.Term, _ = rf.Start(*command)
 }
 
 //
@@ -361,9 +323,15 @@ func (rf *Raft) Kill() {
 	// Your code here, if desired.
 	// 如果测试程序把这台机器kill了
 	rf.mu.Lock()
-	fmt.Printf("s[%v] dead! role:[%v], Leader:[%v] Term:[%v] LAI:[%v]"+
-		" commitIndex:[%v] logsLen[%v]\n", rf.me, rf.role, rf.leaderIndex,
-		rf.currentTerm, rf.lastAppliedIndex, rf.commitIndex, len(rf.logs))
+	fmt.Println("-----dead-----start")
+	fmt.Printf("s[%v] dead! role:[%v], Leader:[%v] Term:[%v]"+
+		"\ncommitIndex:[%v] logsLen[%v]\nlogs:[%v]\n", rf.me, rf.role, rf.leaderIndex,
+		rf.currentTerm, rf.commitIndex, len(rf.logs), rf.logs)
+	if rf.role == Leader {
+		fmt.Println("nextIndex: ", rf.nextIndex)
+		fmt.Println("matchIndex:", rf.matchIndex)
+	}
+	fmt.Println("-----dead-----end")
 	rf.mu.Unlock()
 }
 
@@ -406,7 +374,6 @@ func (rf *Raft) startElection() {
 	for rf.killed() == false {
 		rf.mu.Lock()
 		if rf.voteCount > len(rf.peers)/2 {
-			//fmt.Printf("lll %v %v\n", rf.voteCount, len(rf.peers)/2)
 			// 1.赢得了大部分选票
 			fmt.Printf("s[%v] is Leader now!\n", rf.me)
 			rf.mu.Unlock()
@@ -467,10 +434,10 @@ func (rf *Raft) imLeader() {
 	// 初始化Leader需要的内容
 	rf.nextIndex = make([]int, len(rf.peers))
 	rf.matchIndex = make([]int, len(rf.peers))
-	// 初始化nextIndex为Leader的最后条目索引+1
 	for server := 0; server < len(rf.peers); server++ {
-		rf.nextIndex[server] = len(rf.logs) + 1
 		if server != rf.me {
+			// 初始化nextIndex为Leader的最后条目索引+1
+			rf.nextIndex[server] = len(rf.logs) + 1
 			// 持续通过检查matchIndex给Follower发送新的Log
 			go rf.pushLogsToFollower(server)
 		}
@@ -491,9 +458,11 @@ func (rf *Raft) checkAppliedLogs() {
 			break
 		}
 		niceMatchCount := 0
+		// Leader的最后一条Log的Index
+		lastLogIndex := len(rf.logs)
 		for server := 0; server < len(rf.peers); server++ {
 			if server != rf.me {
-				if rf.matchIndex[server] == rf.commitIndex {
+				if rf.matchIndex[server] == lastLogIndex {
 					niceMatchCount++
 				}
 			} else {
@@ -501,51 +470,28 @@ func (rf *Raft) checkAppliedLogs() {
 			}
 		}
 		rf.mu.Unlock()
-		if niceMatchCount > (len(rf.peers)/2) && rf.lastAppliedIndex < rf.commitIndex {
-			fmt.Printf("L[%v] update applied index to %v\n", rf.me, rf.commitIndex)
-			rf.updateLastAppliedIndex(rf.commitIndex, true)
+		if niceMatchCount > (len(rf.peers)/2) && lastLogIndex > rf.commitIndex {
+			fmt.Printf("L[%v] update commitIndex to [%v]\n", rf.me, lastLogIndex)
+			rf.updateCommitIndex(lastLogIndex)
 		}
 		time.Sleep(checkAppliedLogsTime)
 	}
 }
 
-// 更新自己的lastAppliedIndex,也可顺带更新所有Follower的
-func (rf *Raft) updateLastAppliedIndex(lastAppliedIndex int, updateFollowers bool) {
+// 更新自己的commitIndex,用之前先检查
+func (rf *Raft) updateCommitIndex(commitIndex int) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	if lastAppliedIndex > rf.lastAppliedIndex && lastAppliedIndex <= rf.commitIndex {
-		fmt.Println()
-		for index := rf.lastAppliedIndex; index < lastAppliedIndex; index++ {
-			rf.logs[index].CommandValid = true
-			rf.applyCh <- rf.logs[index]
-		}
-		fmt.Printf("s[%v] lastAppliedIndex update [%v]->[%v]\n", rf.me, rf.lastAppliedIndex, lastAppliedIndex)
-		rf.lastAppliedIndex = lastAppliedIndex
-		fmt.Println(rf.lastAppliedIndex)
-		if updateFollowers {
-			// 更新Followers的lastAppliedIndex
-			// func : 发送单个更新包
-			sendUpdateAppliedPack := func(server int, args *AppendEnTriesArgs) bool {
-				reply := &AppendEntriesReply{}
-				ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
-				return ok && reply.Success
+	if commitIndex > rf.commitIndex {
+		fmt.Printf("s[%v] update commitIndex [%v] -> [%v]\n", rf.me, rf.commitIndex, commitIndex)
+		for index := 0; index < commitIndex; index++ {
+			if rf.logs[index].CommandValid == false {
+				rf.logs[index].CommandValid = true
+				rf.applyCh <- rf.logs[index]
+				//fmt.Println("ttt", rf.me, index)
 			}
-			// 保证所有人接受的包一致
-			updateAppliedPackArgs := &AppendEnTriesArgs{rf.currentTerm, rf.me,
-				UpdateAppliedPack, -1, -1, nil,
-				rf.lastAppliedIndex}
-			// 给除了自己以外的发送更新包
-			//rf.mu.Unlock()
-			for server := 0; server < len(rf.peers); server++ {
-				if server != rf.me {
-					go sendUpdateAppliedPack(server, updateAppliedPackArgs)
-					fmt.Println(server)
-				}
-			}
-			//rf.mu.Lock()
 		}
-	} else {
-		fmt.Printf("F[%v] reject update appliedIndex to [%v], commitIndex:[%v]\n", rf.me, lastAppliedIndex, rf.commitIndex)
+		rf.commitIndex = commitIndex
 	}
 }
 
@@ -558,38 +504,24 @@ func (rf *Raft) pushLogsToFollower(server int) {
 			rf.mu.Unlock()
 			break
 		}
-		if rf.matchIndex[server] != rf.nextIndex[server]-1 {
-			// match不匹配 需要同步
-			allLogs := rf.logs
+		if len(rf.logs) >= rf.nextIndex[server] {
+			pushLogs := rf.logs[rf.nextIndex[server]-1:]
+			pushLastIndex := len(rf.logs)
 			rf.mu.Unlock()
-			syncReply := rf.sendAppendEntries(allLogs, 1, server)
-			if syncReply.Success == true {
-				// 同步成功,如果失败的话可能是断网之类的
-				rf.mu.Lock()
-				rf.nextIndex[server] = len(allLogs) + 1
-				rf.matchIndex[server] = len(allLogs)
-				fmt.Printf("s[%v] sync logs,match:[%v] next:[%v]\n", server, rf.matchIndex[server], rf.nextIndex[server])
-				rf.mu.Unlock()
+			pushReply := rf.sendAppendEntries(pushLogs, rf.nextIndex[server], server)
+			rf.mu.Lock()
+			if pushReply.Success {
+				// 成功,更新next match Index
+				rf.nextIndex[server] = pushLastIndex + 1
+				rf.matchIndex[server] = pushLastIndex
+				fmt.Printf("L[%v] push log[%v] to F[%v] success\n", rf.me, pushLogs, server)
 			} else {
-				fmt.Printf("\n")
+				// 推送失败,减少nextIndex且重试
+				rf.nextIndex[server]--
+				fmt.Printf("L[%v] push log[%v] to F[%v] failed\n", rf.me, pushLogs, server)
 			}
-		} else if rf.nextIndex[server] <= rf.commitIndex {
-			// 这个Follower需要新的Log
-			fmt.Printf("s[%v] append logs, next:[%v]\n", server, rf.nextIndex[server])
-			nextIndex := rf.nextIndex[server]
-			appendLogs := rf.logs[nextIndex-1:]
-			rf.mu.Unlock()
-			appendReply := rf.sendAppendEntries(appendLogs, nextIndex, server)
-			if appendReply.Success == true {
-				// 推送成功
-				rf.mu.Lock()
-				rf.nextIndex[server] += len(appendLogs)
-				rf.matchIndex[server] += len(appendLogs)
-				rf.mu.Unlock()
-			}
-		} else {
-			rf.mu.Unlock()
 		}
+		rf.mu.Unlock()
 		time.Sleep(PushLogsTime)
 	}
 }
@@ -599,7 +531,7 @@ func (rf *Raft) sendAppendEntries(logs []ApplyMsg, nextIndex int, server int) *A
 	reply := &AppendEntriesReply{}
 	rf.mu.Lock()
 	args := &AppendEnTriesArgs{rf.currentTerm, rf.me,
-		AppendPack, 0, 0, logs, rf.lastAppliedIndex}
+		0, 0, logs, rf.commitIndex}
 	if nextIndex > 1 {
 		// 如果新条目不是第一条日志
 		args.PrevLogIndex, args.PrevLogTerm = nextIndex-1, rf.logs[nextIndex-1].CommandTerm
@@ -628,9 +560,8 @@ func (rf *Raft) sendHeartBeatToAll() {
 			return
 		}
 		// 每次心跳包的args保持一致
-		heartBeatArgs := &AppendEnTriesArgs{rf.currentTerm, rf.me,
-			HeartPack, 0,
-			0, nil, 0}
+		heartBeatArgs := &AppendEnTriesArgs{rf.currentTerm, rf.me, 0,
+			0, nil, rf.commitIndex}
 		rf.mu.Unlock()
 		// 给除了自己以外的服务器发送心跳包
 		for server := 0; server < len(rf.peers); server++ {
@@ -660,7 +591,6 @@ type AppendEnTriesArgs struct {
 	LeaderId   int // Leader's index
 	// IsHeartBeat bool // 是否为心跳包
 	// 2B start
-	PackType     int        // 包类型
 	PrevLogIndex int        // 新日志条目之前的日志的索引
 	PrevLogTerm  int        // 新日志之前的日志的任期
 	Logs         []ApplyMsg // 需要被保存的日志条目
@@ -676,7 +606,6 @@ type AppendEntriesReply struct {
 // AppendEntries Follower接收Leader的追加/心跳包
 func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply) {
 	rf.mu.Lock()
-	defer rf.mu.Unlock()
 	reply.FollowerTerm = rf.currentTerm
 	// 如果sender的term大于receiver,更新receiver的term和role
 	if args.LeaderTerm > rf.currentTerm {
@@ -687,39 +616,36 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 	} else if args.LeaderTerm < rf.currentTerm {
 		// 不正常的包,Leader的Term小于Follower的Term
 		reply.Success = false
+		rf.mu.Unlock()
 		return
 	}
-	switch args.PackType {
-	case HeartPack:
-		// 清空投票记录
+	if len(args.Logs) == 0 {
+		// 心跳包,清空投票记录
 		go rf.resetVoteData(false)
 		rf.leaderIndex = args.LeaderId
 		// 更新心跳包超时时间
-		rf.role = Follower
 		rf.heartBeatTimeOut = time.Now().Add(getRandElectionTimeOut())
-	case AppendPack:
-		// 处理追加条目
-		if args.PrevLogIndex != 0 {
-			// 正常追加条目,检查prev Index,Term
-			if rf.logs[args.PrevLogIndex-1].CommandTerm == args.PrevLogTerm {
-				// 校验正常
-				rf.logs = append(rf.logs, args.Logs...)
-				fmt.Printf("%v %v\n", args.Logs, rf.me)
-				reply.Success = true
-			} else {
-				// 校验失败,需要同步
-				reply.Success = false
-			}
-		} else {
-			// 可能是第一条Log或者可能是同步包(包括Leader绝大部分的Logs),前一条log是0
+		reply.Success = true
+	} else {
+		// 追加包
+		if args.PrevLogIndex == 0 {
+			// 如果是第一条Log 不校验
 			rf.logs = args.Logs
-			rf.commitIndex = len(args.Logs)
-			//rf.lastAppliedIndex = args.LeaderCommit
 			reply.Success = true
+		} else if args.PrevLogIndex <= len(rf.logs) && rf.logs[args.PrevLogIndex-1].CommandTerm == args.PrevLogTerm {
+			// 校验正常 可以正常追加
+			rf.logs = append(rf.logs[:args.PrevLogIndex], args.Logs...)
+			reply.Success = true
+		} else {
+			// 校验失败
+			rf.logs = rf.logs[:args.PrevLogIndex-1]
+			reply.Success = false
 		}
-	case UpdateAppliedPack:
-		fmt.Println(args.LeaderCommit, rf.commitIndex)
-		go rf.updateLastAppliedIndex(args.LeaderCommit, false)
+	}
+	// 检查leaderCommit
+	rf.mu.Unlock()
+	if args.LeaderCommit > rf.commitIndex {
+		rf.updateCommitIndex(int(math.Min(float64(args.LeaderCommit), float64(len(rf.logs)))))
 	}
 }
 
@@ -745,7 +671,6 @@ func Make(peers []*labrpc.ClientEnd, me int, persister *Persister, applyCh chan 
 	rf.votedFor = -1
 	rf.role = Follower
 	rf.leaderIndex = -1
-	//rf.heartBeatTimeOut = time.Now().Add(getRandElectionTimeOut())
 	fmt.Printf("build s[%d] peer's count [%d]\n", rf.me, len(rf.peers))
 	// 2A end
 	// 2B start
