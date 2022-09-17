@@ -190,6 +190,10 @@ type RequestVoteArgs struct {
 	CandidateTerm int // 候选人的任期号(自己的)
 	CandidateId   int // 请求选票的候选人的ID(peer's index)
 	// 2A end
+	// 2B start
+	CandidateLastLogIndex int // 候选人的最后日志条目的索引
+	CandidateLastLogTerm  int // 候选人最后日志条目的任期
+	// 2B end
 }
 
 //
@@ -214,18 +218,28 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	defer rf.mu.Unlock()
 	rf.leaderIndex = -1
 	// 如果sender的term大于receiver,更新receiver的term和role
-	if args.CandidateTerm > rf.currentTerm {
+	if args.CandidateTerm > rf.currentTerm && rf.role != Follower {
 		fmt.Printf("s[%v] trans to Follower by s[%v] when RequestVote\n", rf.me, args.CandidateId)
 		rf.currentTerm = args.CandidateTerm
 		rf.role = Follower
 		rf.votedFor = -1
 		rf.heartBeatTimeOut = time.Now().Add(getRandElectionTimeOut())
 	}
-	// 是否投票给他
+	// 检查候选人的Term和自己有没有投票给别人
 	if args.CandidateTerm >= rf.currentTerm && (rf.votedFor == -1 || rf.votedFor == args.CandidateId) {
-		reply.VoteGranted = true
-		rf.votedFor = args.CandidateId
-	} else {
+		// Candidate的Log至少和自己一样新
+		if args.CandidateLastLogIndex == 0 && len(rf.logs) == 0 {
+			reply.VoteGranted = true
+			rf.votedFor = args.CandidateId
+		} else if args.CandidateLastLogIndex > len(rf.logs) {
+			reply.VoteGranted = true
+			rf.votedFor = args.CandidateId
+		} else if args.CandidateLastLogIndex == len(rf.logs) && args.CandidateLastLogTerm == rf.logs[len(rf.logs)-1].CommandTerm {
+			reply.VoteGranted = true
+			rf.votedFor = args.CandidateId
+		}
+	}
+	if reply.VoteGranted == false {
 		fmt.Printf("s[%v] reject vote for [%v],role:%v votedFor:%v\n", rf.me, args.CandidateId, rf.role, rf.votedFor)
 	}
 	reply.FollowerTerm = rf.currentTerm
@@ -416,7 +430,11 @@ func (rf *Raft) collectVotes() {
 	}
 	rf.mu.Lock()
 	// 请求投票的args需要保持一致
-	args := &RequestVoteArgs{rf.currentTerm, rf.me}
+	args := &RequestVoteArgs{rf.currentTerm, rf.me, 0, 0}
+	if len(rf.logs) > 0 {
+		args.CandidateLastLogIndex = len(rf.logs)
+		args.CandidateLastLogTerm = rf.logs[len(rf.logs)-1].CommandTerm
+	}
 	reply := make([]*RequestVoteReply, len(rf.peers))
 	rf.mu.Unlock()
 	for server := 0; server < len(rf.peers); server++ {
@@ -488,7 +506,6 @@ func (rf *Raft) updateCommitIndex(commitIndex int) {
 			if rf.logs[index].CommandValid == false {
 				rf.logs[index].CommandValid = true
 				rf.applyCh <- rf.logs[index]
-				//fmt.Println("ttt", rf.me, index)
 			}
 		}
 		rf.commitIndex = commitIndex
@@ -514,11 +531,11 @@ func (rf *Raft) pushLogsToFollower(server int) {
 				// 成功,更新next match Index
 				rf.nextIndex[server] = pushLastIndex + 1
 				rf.matchIndex[server] = pushLastIndex
-				fmt.Printf("L[%v] push log[%v] to F[%v] success\n", rf.me, pushLogs, server)
+				fmt.Printf("L[%v] push log to F[%v] success,logs:[%v]\n", rf.me, server, pushLogs)
 			} else {
 				// 推送失败,减少nextIndex且重试
 				rf.nextIndex[server]--
-				fmt.Printf("L[%v] push log[%v] to F[%v] failed\n", rf.me, pushLogs, server)
+				fmt.Printf("L[%v] push log to F[%v] failed,logs:[%v]\n", rf.me, server, pushLogs)
 			}
 		}
 		rf.mu.Unlock()
@@ -589,7 +606,6 @@ func (rf *Raft) resetVoteData(voteMe bool) {
 type AppendEnTriesArgs struct {
 	LeaderTerm int // Leader's term
 	LeaderId   int // Leader's index
-	// IsHeartBeat bool // 是否为心跳包
 	// 2B start
 	PrevLogIndex int        // 新日志条目之前的日志的索引
 	PrevLogTerm  int        // 新日志之前的日志的任期
@@ -606,6 +622,13 @@ type AppendEntriesReply struct {
 // AppendEntries Follower接收Leader的追加/心跳包
 func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply) {
 	rf.mu.Lock()
+	if rf.role == Candidate && len(args.Logs) > 0 {
+		// 如果候选人收到来自Leader的Append包,变为Follower
+		rf.role = Follower
+		rf.currentTerm = args.LeaderTerm
+		rf.heartBeatTimeOut = time.Now().Add(getRandElectionTimeOut())
+		go rf.resetVoteData(false)
+	}
 	reply.FollowerTerm = rf.currentTerm
 	// 如果sender的term大于receiver,更新receiver的term和role
 	if args.LeaderTerm > rf.currentTerm {
@@ -636,9 +659,12 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 			// 校验正常 可以正常追加
 			rf.logs = append(rf.logs[:args.PrevLogIndex], args.Logs...)
 			reply.Success = true
+		} else if args.PrevLogIndex <= len(rf.logs) && rf.logs[args.PrevLogIndex-1].CommandTerm != args.PrevLogTerm {
+			// 发生冲突,索引相同任期不同
+			rf.logs = rf.logs[:args.PrevLogIndex-1]
+			reply.Success = false
 		} else {
 			// 校验失败
-			rf.logs = rf.logs[:args.PrevLogIndex-1]
 			reply.Success = false
 		}
 	}
