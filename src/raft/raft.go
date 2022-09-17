@@ -57,9 +57,10 @@ const (
 	Candidate = 2
 	Leader    = 3
 
-	TickerSleepTime   = 15 * time.Millisecond  // Ticker 睡眠时间 ms
-	ElectionSleepTime = 30 * time.Millisecond  // 选举睡眠时间
-	HeartBeatSendTime = 100 * time.Millisecond // 心跳包发送时间 ms
+	TickerSleepTime       = 15 * time.Millisecond  // Ticker 睡眠时间 ms
+	ElectionSleepTime     = 30 * time.Millisecond  // 选举睡眠时间
+	ElectionVoteSleepTime = 220 * time.Millisecond // 选举要求投票睡眠时间
+	HeartBeatSendTime     = 100 * time.Millisecond // 心跳包发送时间 ms
 
 	ElectionTimeOutMin = 200 // 选举超时时间(也用于检查是否需要开始选举) 区间
 	ElectionTimeOutMax = 400
@@ -195,7 +196,6 @@ type RequestVoteReply struct {
 //
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
-	// 2A start
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	// 如果接收到的RPC请求或响应中,任期号T>currentTerm,那么就令currentTerm等于T,并且切换状态为Follower
@@ -216,7 +216,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		fmt.Printf("s[%v] reject vote to [%v],role:[%v],votedFor:[%v]\n", rf.me, args.CandidateIndex, rf.role, rf.votedFor)
 	}
 	reply.FollowerTerm = rf.currentTerm
-	// 2A end
+	fmt.Printf("s[%v] be asked vote to [%v] reply:%v args:%v\n", rf.me, args.CandidateIndex, reply, args)
 }
 
 //
@@ -395,6 +395,7 @@ func (rf *Raft) collectVotes(timeOut time.Time) {
 			rf.currentTerm = reply.FollowerTerm
 			rf.role = Follower
 		}
+		fmt.Printf("s[%v] ask vote result%v %v\n", rf.me, ok, reply)
 	}
 	for rf.killed() == false {
 		rf.mu.Lock()
@@ -410,8 +411,9 @@ func (rf *Raft) collectVotes(timeOut time.Time) {
 				go askVote(server, askVoteArgs)
 			}
 		}
+		fmt.Printf("s[%v] ask vote\n", rf.me)
 		rf.mu.Unlock()
-		time.Sleep(ElectionSleepTime)
+		time.Sleep(ElectionVoteSleepTime)
 	}
 }
 
