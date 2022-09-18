@@ -349,6 +349,7 @@ func (rf *Raft) startElection() {
 		} else if rf.role == Follower {
 			// 2.其他人成为了Leader,转为Follower了
 			fmt.Printf("F[%v] another server is Leader now\n", rf.me)
+			rf.votedFor = -1
 			rf.mu.Unlock()
 			return
 		} else if electionTimeOut.Before(time.Now()) {
