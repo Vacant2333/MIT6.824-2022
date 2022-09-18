@@ -57,12 +57,12 @@ const (
 	Candidate = 2
 	Leader    = 3
 
-	TickerSleepTime   = 45 * time.Millisecond  // Ticker 睡眠时间 ms
+	TickerSleepTime   = 20 * time.Millisecond  // Ticker 睡眠时间 ms
 	ElectionSleepTime = 30 * time.Millisecond  // 选举睡眠时间
-	HeartBeatSendTime = 100 * time.Millisecond // 心跳包发送时间 ms
+	HeartBeatSendTime = 110 * time.Millisecond // 心跳包发送时间 ms
 
-	ElectionTimeOutMin = 200 // 选举超时时间(也用于检查是否需要开始选举) 区间
-	ElectionTimeOutMax = 400
+	ElectionTimeOutMin = 150 // 选举超时时间(也用于检查是否需要开始选举) 区间
+	ElectionTimeOutMax = 300
 )
 
 // 获得一个随机选举超时时间
@@ -341,13 +341,13 @@ func (rf *Raft) startElection() {
 		if voteCount > len(rf.peers)/2 {
 			// 1.赢得了大部分选票,成为Leader
 			fmt.Printf("L[%v] is a Leader now\n", rf.me)
-			rf.mu.Unlock()
 			rf.role = Leader
+			rf.mu.Unlock()
 			// 持续发送心跳包
 			go rf.sendHeartBeats()
 			return
 		} else if rf.role == Follower {
-			// 2.其他人成为了Leader,转为Follower
+			// 2.其他人成为了Leader,转为Follower了
 			fmt.Printf("F[%v] another server is Leader now\n", rf.me)
 			rf.mu.Unlock()
 			return
@@ -396,6 +396,7 @@ func (rf *Raft) collectVotes() {
 			rf.currentTerm = reply.FollowerTerm
 			rf.role = Follower
 		}
+		fmt.Printf("C[%v] request vote ok:[%v] [%v]\n", rf.me, ok, reply)
 	}
 	rf.mu.Lock()
 	// 持续并行的向所有人要求投票给自己,Args保持一致
