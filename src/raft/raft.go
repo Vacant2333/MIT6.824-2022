@@ -57,10 +57,9 @@ const (
 	Candidate = 2
 	Leader    = 3
 
-	TickerSleepTime       = 15 * time.Millisecond  // Ticker 睡眠时间 ms
-	ElectionSleepTime     = 30 * time.Millisecond  // 选举睡眠时间
-	ElectionVoteSleepTime = 220 * time.Millisecond // 选举要求投票睡眠时间
-	HeartBeatSendTime     = 100 * time.Millisecond // 心跳包发送时间 ms
+	TickerSleepTime   = 45 * time.Millisecond  // Ticker 睡眠时间 ms
+	ElectionSleepTime = 30 * time.Millisecond  // 选举睡眠时间
+	HeartBeatSendTime = 100 * time.Millisecond // 心跳包发送时间 ms
 
 	ElectionTimeOutMin = 200 // 选举超时时间(也用于检查是否需要开始选举) 区间
 	ElectionTimeOutMax = 400
@@ -334,19 +333,21 @@ func (rf *Raft) startElection() {
 	electionTimeOut := time.Now().Add(getRandElectionTimeOut())
 	rf.mu.Unlock()
 	// 并行收集选票
-	go rf.collectVotes(electionTimeOut)
+	go rf.collectVotes()
 	// 检查结果
 	for rf.killed() == false {
 		voteCount := rf.getGrantedVotes()
 		rf.mu.Lock()
 		if voteCount > len(rf.peers)/2 {
-			// 1.赢得了大部分选票
+			// 1.赢得了大部分选票,成为Leader
 			fmt.Printf("L[%v] is a Leader now\n", rf.me)
 			rf.mu.Unlock()
-			go rf.imLeader()
+			rf.role = Leader
+			// 持续发送心跳包
+			go rf.sendHeartBeats()
 			return
 		} else if rf.role == Follower {
-			// 2.其他人成为了Leader
+			// 2.其他人成为了Leader,转为Follower
 			fmt.Printf("F[%v] another server is Leader now\n", rf.me)
 			rf.mu.Unlock()
 			return
@@ -377,7 +378,7 @@ func (rf *Raft) getGrantedVotes() int {
 }
 
 // 并行地向所有Peers收集选票
-func (rf *Raft) collectVotes(timeOut time.Time) {
+func (rf *Raft) collectVotes() {
 	// 询问某个Server要求选票
 	askVote := func(server int, args *RequestVoteArgs) {
 		reply := &RequestVoteReply{}
@@ -395,35 +396,16 @@ func (rf *Raft) collectVotes(timeOut time.Time) {
 			rf.currentTerm = reply.FollowerTerm
 			rf.role = Follower
 		}
-		fmt.Printf("s[%v] ask vote result%v %v\n", rf.me, ok, reply)
 	}
-	for rf.killed() == false {
-		rf.mu.Lock()
-		// 如果角色不是Candidate或者选举超时了就直接退出
-		if rf.role != Candidate || timeOut.Before(time.Now()) {
-			rf.mu.Unlock()
-			return
-		}
-		// 持续并行的向所有人要求投票给自己,Args保持一致
-		askVoteArgs := &RequestVoteArgs{rf.currentTerm, rf.me}
-		for server := 0; server < len(rf.peers); server++ {
-			if server != rf.me {
-				go askVote(server, askVoteArgs)
-			}
-		}
-		fmt.Printf("s[%v] ask vote\n", rf.me)
-		rf.mu.Unlock()
-		time.Sleep(ElectionVoteSleepTime)
-	}
-}
-
-// 成为Leader
-func (rf *Raft) imLeader() {
 	rf.mu.Lock()
-	rf.role = Leader
+	// 持续并行的向所有人要求投票给自己,Args保持一致
+	askVoteArgs := &RequestVoteArgs{rf.currentTerm, rf.me}
+	for server := 0; server < len(rf.peers); server++ {
+		if server != rf.me {
+			go askVote(server, askVoteArgs)
+		}
+	}
 	rf.mu.Unlock()
-	// 持续发送心跳包
-	go rf.sendHeartBeats()
 }
 
 // 持续发送心跳包给所有人
