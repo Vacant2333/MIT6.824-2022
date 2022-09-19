@@ -476,6 +476,7 @@ func TestRejoin2B(t *testing.T) {
 	// leader network failure
 	leader1 := cfg.checkOneLeader()
 	cfg.disconnect(leader1)
+	fmt.Printf("Test: disconnect1 s[%v]\n", leader1)
 
 	// make old leader try to agree on some entries
 	cfg.rafts[leader1].Start(102)
@@ -488,14 +489,18 @@ func TestRejoin2B(t *testing.T) {
 	// new leader network failure
 	leader2 := cfg.checkOneLeader()
 	cfg.disconnect(leader2)
+	fmt.Printf("Test: disconnect2 s[%v]\n", leader2)
 
 	// old leader connected again
 	cfg.connect(leader1)
+	fmt.Printf("Test: reconnect1 s[%v]\n", leader1)
 
+	fmt.Printf("Test: disconnect 1:[%v] 2:[%v]\n", leader1, leader2)
 	cfg.one(104, 2, true)
 
 	// all together now
 	cfg.connect(leader2)
+	fmt.Printf("Test: reconnect2 s[%v]\n", leader2)
 
 	cfg.one(105, servers, true)
 

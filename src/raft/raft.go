@@ -62,8 +62,8 @@ const (
 	ElectionSleepTime = 30 * time.Millisecond  // 选举睡眠时间
 	HeartBeatSendTime = 110 * time.Millisecond // 心跳包发送时间 ms
 
-	PushLogsTime         = 50 * time.Millisecond // Leader推送Log的间隔时间
-	checkAppliedLogsTime = 25 * time.Millisecond // Leader更新applied的间隔时间
+	PushLogsTime           = 50 * time.Millisecond // Leader推送Log的间隔时间
+	checkCommittedLogsTime = 25 * time.Millisecond // Leader更新applied的间隔时间
 
 	ElectionTimeOutMin = 150 // 选举超时时间(也用于检查是否需要开始选举) 区间
 	ElectionTimeOutMax = 300
@@ -220,20 +220,30 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		rf.currentTerm = args.CandidateTerm
 		rf.role = Follower
 		rf.votedFor = -1
-		rf.heartBeatTimeOut = time.Now().Add(getRandElectionTimeOut())
+		// todo:切换状态时更新TimeOut
+		//rf.heartBeatTimeOut = time.Now().Add(getRandElectionTimeOut())
 	}
 	// 是否投票给他
 	if args.CandidateTerm >= rf.currentTerm && (rf.votedFor == -1 || rf.votedFor == args.CandidateIndex) {
 		// Candidate的Log至少和自己一样新,才能给他投票
-		if (args.CandidateLastLogIndex == 0 && len(rf.logs) == 0) ||
-			(args.CandidateLastLogIndex > len(rf.logs)) ||
-			(args.CandidateLastLogIndex == len(rf.logs) && args.CandidateLastLogTerm == rf.logs[len(rf.logs)-1].CommandTerm) {
+		if args.CandidateLastLogIndex == 0 && len(rf.logs) == 0 {
+			// Candidate和自己都没有Log,可以直接投
+			reply.VoteGranted = true
+			rf.votedFor = args.CandidateIndex
+			rf.heartBeatTimeOut = time.Now().Add(getRandElectionTimeOut())
+		} else if args.CandidateLastLogTerm > rf.logs[len(rf.logs)-1].CommandTerm {
+			// 如果两份日志最后的条目的任期号不同,那么任期号大的日志更加新,在这里Candidate的最后一个Term大于Follower,可以投
+			reply.VoteGranted = true
+			rf.votedFor = args.CandidateIndex
+			rf.heartBeatTimeOut = time.Now().Add(getRandElectionTimeOut())
+		} else if args.CandidateLastLogTerm == rf.logs[len(rf.logs)-1].CommandTerm && args.CandidateLastLogIndex >= len(rf.logs) {
+			// 如果两份日志最后的条目任期号相同,那么日志比较长的那个就更加新
 			reply.VoteGranted = true
 			rf.votedFor = args.CandidateIndex
 			rf.heartBeatTimeOut = time.Now().Add(getRandElectionTimeOut())
 		}
-	} else {
-		reply.VoteGranted = false
+	}
+	if reply.VoteGranted == false {
 		fmt.Printf("F[%v] reject vote to [%v],role:[%v],votedFor:[%v]\n", rf.me, args.CandidateIndex, rf.role, rf.votedFor)
 	}
 	reply.FollowerTerm = rf.currentTerm
@@ -293,18 +303,20 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	isLeader := true
 	// Your code here (2B).
 	// 2B start
-	// todo:检查重复
 	rf.mu.Lock()
 	isLeader = rf.role == Leader
 	term = rf.currentTerm
 	if isLeader {
 		fmt.Printf("L[%v] Leader get a Start request[%v], len:[%v]\n", rf.me, command, rf.commitIndex+1)
 		index = len(rf.logs) + 1
-		if index != 1 && command == rf.logs[len(rf.logs)-1].Command {
-			rf.mu.Unlock()
-			isLeader = false
-			return index, term, isLeader
-		}
+		/*
+			// todo:Start检查重复
+			if index != 1 && command == rf.logs[len(rf.logs)-1].Command {
+				rf.mu.Unlock()
+				isLeader = false
+				return index, term, isLeader
+			}
+		*/
 		term = rf.currentTerm
 		log := ApplyMsg{}
 		log.Command = command
@@ -402,7 +414,7 @@ func (rf *Raft) startElection() {
 			rf.mu.Unlock()
 			// 持续发送心跳包
 			go rf.sendHeartBeats()
-			go rf.checkAppliedLogs()
+			go rf.checkCommittedLogs()
 			return
 		} else if rf.role == Follower {
 			// 2.其他人成为了Leader,转为Follower了
@@ -455,11 +467,11 @@ func (rf *Raft) collectVotes() {
 			rf.currentTerm = reply.FollowerTerm
 			rf.role = Follower
 		}
-		//fmt.Printf("C[%v] request vote ok:[%v] [%v]\n", rf.me, ok, reply)
 	}
 	rf.mu.Lock()
 	// 持续并行的向所有人要求投票给自己,Args保持一致
 	askVoteArgs := &RequestVoteArgs{rf.currentTerm, rf.me, 0, 0}
+	// 填入Leader的最后一条Log的Term和Index,给Follower校验后更新commitIndex
 	if len(rf.logs) > 0 {
 		askVoteArgs.CandidateLastLogIndex = len(rf.logs)
 		askVoteArgs.CandidateLastLogTerm = rf.logs[len(rf.logs)-1].CommandTerm
@@ -473,13 +485,13 @@ func (rf *Raft) collectVotes() {
 }
 
 // Leader持续更新自己的已提交logs
-func (rf *Raft) checkAppliedLogs() {
+func (rf *Raft) checkCommittedLogs() {
 	for rf.killed() == false {
 		rf.mu.Lock()
 		if rf.role != Leader {
-			fmt.Printf("s[%v] is not a Leader in checkAL\n", rf.me)
+			fmt.Printf("F[%v] is not a Leader in checkCommittedLogs\n", rf.me)
 			rf.mu.Unlock()
-			break
+			return
 		}
 		// 和Leader的Logs数量匹配的Server
 		matchServer := append(make([]int, 0), rf.me)
@@ -497,7 +509,7 @@ func (rf *Raft) checkAppliedLogs() {
 			fmt.Printf("L[%v] update commitIndex to [%v]\n", rf.me, lastLogIndex)
 			rf.updateCommitIndex(lastLogIndex)
 		}
-		time.Sleep(checkAppliedLogsTime)
+		time.Sleep(checkCommittedLogsTime)
 	}
 }
 
@@ -544,7 +556,7 @@ func (rf *Raft) pushLogsToFollower(server int) {
 				rf.currentTerm = pushReply.FollowerTerm
 			} else {
 				// 推送失败,减少nextIndex且重试
-				if rf.nextIndex[server] > 0 {
+				if rf.nextIndex[server] > 1 {
 					rf.nextIndex[server]--
 				}
 				fmt.Printf("L[%v] push log to F[%v] failed,logs:[%v]\n", rf.me, server, pushLogs)
@@ -598,6 +610,10 @@ func (rf *Raft) sendHeartBeats() {
 		// 每次心跳包的args保持一致
 		heartBeatArgs := &AppendEnTriesArgs{rf.currentTerm, rf.me, 0,
 			0, nil, rf.commitIndex}
+		if len(rf.logs) > 0 {
+			heartBeatArgs.PrevLogIndex = len(rf.logs)
+			heartBeatArgs.PrevLogTerm = rf.logs[len(rf.logs)-1].CommandTerm
+		}
 		rf.mu.Unlock()
 		// 给除了自己以外的服务器发送心跳包
 		for server := 0; server < len(rf.peers); server++ {
@@ -672,8 +688,8 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 	rf.heartBeatTimeOut = time.Now().Add(getRandElectionTimeOut())
 	rf.votedFor = -1
 	rf.role = Follower
-	// 检查是否需要更新commitIndex
-	if args.LeaderCommit > rf.commitIndex {
+	// 检查是否需要更新commitIndex, 最后一条Log的Term和Index必须和Leader对得上才能更新
+	if args.LeaderCommit > rf.commitIndex && len(rf.logs) == args.PrevLogIndex && rf.logs[len(rf.logs)-1].CommandTerm == args.PrevLogTerm {
 		go rf.updateCommitIndex(int(math.Min(float64(args.LeaderCommit), float64(len(rf.logs)))))
 	}
 }
