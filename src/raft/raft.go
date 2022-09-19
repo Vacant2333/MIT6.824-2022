@@ -413,7 +413,7 @@ func (rf *Raft) startElection() {
 			}
 			rf.mu.Unlock()
 			// 持续发送心跳包
-			go rf.sendHeartBeats()
+			go rf.sendHeartBeatsToAll()
 			go rf.checkCommittedLogs()
 			return
 		} else if rf.role == Follower {
@@ -504,11 +504,11 @@ func (rf *Raft) checkCommittedLogs() {
 				}
 			}
 		}
-		rf.mu.Unlock()
 		if len(matchServer) > (len(rf.peers)/2) && lastLogIndex > rf.commitIndex {
 			fmt.Printf("L[%v] update commitIndex to [%v]\n", rf.me, lastLogIndex)
-			rf.updateCommitIndex(lastLogIndex)
+			go rf.updateCommitIndex(lastLogIndex)
 		}
+		rf.mu.Unlock()
 		time.Sleep(checkCommittedLogsTime)
 	}
 }
@@ -539,16 +539,19 @@ func (rf *Raft) pushLogsToFollower(server int) {
 			return
 		}
 		if rf.matchIndex[server] < len(rf.logs) {
-			pushLogs := rf.logs[rf.nextIndex[server]-1:]
+			followerNextIndex := rf.nextIndex[server]
+			pushLogs := make([]ApplyMsg, len(rf.logs[followerNextIndex-1:]))
+			// 必须Copy不能直接传,不然会导致Race
+			copy(pushLogs, rf.logs[followerNextIndex-1:])
 			pushLastIndex := len(rf.logs)
 			rf.mu.Unlock()
-			pushReply := rf.sendAppendEntries(pushLogs, rf.nextIndex[server], server)
+			pushReply := rf.sendAppendEntries(pushLogs, followerNextIndex, server)
 			rf.mu.Lock()
 			if pushReply.Success {
 				// 成功,更新next match Index
 				rf.nextIndex[server] = pushLastIndex + 1
 				rf.matchIndex[server] = pushLastIndex
-				fmt.Printf("L[%v] push log to F[%v] success,logs:[%v]\n", rf.me, server, pushLogs)
+				//fmt.Printf("L[%v] push log to F[%v] success,logs:[%v]\n", rf.me, server, pushLogs)
 			} else if pushReply.FollowerTerm > rf.currentTerm {
 				// Follower的Term大于自己
 				rf.role = Follower
@@ -559,7 +562,7 @@ func (rf *Raft) pushLogsToFollower(server int) {
 				if rf.nextIndex[server] > 1 {
 					rf.nextIndex[server]--
 				}
-				fmt.Printf("L[%v] push log to F[%v] failed,logs:[%v]\n", rf.me, server, pushLogs)
+				//fmt.Printf("L[%v] push log to F[%v] failed,logs:[%v]\n", rf.me, server, pushLogs)
 			}
 		}
 		rf.mu.Unlock()
@@ -567,7 +570,7 @@ func (rf *Raft) pushLogsToFollower(server int) {
 	}
 }
 
-// 给单个Follower推送新的logs,如果nextIndex是1的话Follower无需Check
+// 给单个Follower推送新的Logs,如果nextIndex是1的话Follower无需Check
 func (rf *Raft) sendAppendEntries(logs []ApplyMsg, nextIndex int, server int) *AppendEntriesReply {
 	reply := &AppendEntriesReply{}
 	rf.mu.Lock()
@@ -582,7 +585,7 @@ func (rf *Raft) sendAppendEntries(logs []ApplyMsg, nextIndex int, server int) *A
 }
 
 // 持续发送心跳包给所有人
-func (rf *Raft) sendHeartBeats() {
+func (rf *Raft) sendHeartBeatsToAll() {
 	// func : 发送单个心跳包
 	sendHeartBeat := func(server int, args *AppendEnTriesArgs) bool {
 		reply := &AppendEntriesReply{}
