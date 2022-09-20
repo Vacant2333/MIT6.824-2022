@@ -66,7 +66,7 @@ const (
 	HeartBeatSendTime = 110 * time.Millisecond // 心跳包发送时间 ms
 
 	PushLogsTime           = 10 * time.Millisecond // Leader推送Log的间隔时间
-	checkCommittedLogsTime = 70 * time.Millisecond // Leader更新Applied的间隔时间
+	checkCommittedLogsTime = 15 * time.Millisecond // Leader更新CommitIndex的间隔时间
 
 	ElectionTimeOutMin = 150 // 选举超时时间(也用于检查是否需要开始选举) 区间
 	ElectionTimeOutMax = 300
@@ -161,7 +161,7 @@ func (rf *Raft) readPersist(data []byte) {
 		rf.CurrentTerm = currentTerm
 		rf.Logs = logs
 	}
-	fmt.Printf("s[%v] readPersist\n", rf.me)
+	//fmt.Printf("s[%v] readPersist logs:%v\n", rf.me, len(logs))
 }
 
 //
@@ -310,7 +310,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	isLeader = rf.role == Leader
 	term = rf.CurrentTerm
 	if isLeader {
-		////fmt.Printf("L[%v] Leader get a Start request[%v], len:[%v]\n", rf.me, command, rf.commitIndex+1)
+		fmt.Printf("L[%v] Leader get a Start request[%v], len:[%v]\n", rf.me, command, rf.commitIndex+1)
 		index = len(rf.Logs) + 1
 		term = rf.CurrentTerm
 		log := ApplyMsg{}
@@ -541,23 +541,27 @@ func (rf *Raft) pushLogsToFollower(server int) {
 		if rf.matchIndex[server] < len(rf.Logs) {
 			followerNextIndex := rf.nextIndex[server]
 			pushLogs := make([]ApplyMsg, len(rf.Logs[followerNextIndex-1:]))
+			if len(pushLogs) == 0 {
+				fmt.Printf("L[%v] push(start) empty log to s[%v] next:[%v] match:[%v]\n", rf.me, server, followerNextIndex, rf.matchIndex[server])
+			}
 			// 必须Copy不能直接传,不然会导致Race
 			copy(pushLogs, rf.Logs[followerNextIndex-1:])
 			pushLastIndex := len(rf.Logs)
-			rf.mu.Unlock()
 			pushReply := rf.sendAppendEntries(pushLogs, followerNextIndex, server)
-			rf.mu.Lock()
 			if pushReply.Success {
 				// 成功,更新next match Index
 				rf.nextIndex[server] = pushLastIndex + 1
 				rf.matchIndex[server] = pushLastIndex
+				fmt.Printf("to s[%v] flag1\n", server)
 				//fmt.Printf("L[%v] push log to F[%v] success,Logs:[%v]\n", rf.me, server, pushLogs)
 			} else if pushReply.FollowerTerm > rf.CurrentTerm {
 				// 如果接收到的RPC请求或响应中,任期号T>CurrentTerm,那么就令currentTerm等于T,并且切换状态为Follower
 				rf.transToFollower(pushReply.FollowerTerm)
+				fmt.Printf("to s[%v] flag2\n", server)
 			} else {
 				// 推送失败,减少nextIndex且重试
 				if rf.nextIndex[server] > 1 {
+					fmt.Printf("to s[%v] flag3\n", server)
 					/*
 						如果需要的话，算法可以通过减少被拒绝的附加日志 RPCs 的次数来优化。例如，当附加日志 RPC 的请
 						求被拒绝的时候，跟随者可以包含冲突的条目的任期号和自己存储的那个任期的最早的索引地址。借助
@@ -567,9 +571,11 @@ func (rf *Raft) pushLogsToFollower(server int) {
 					*/
 					//rf.nextIndex[server] -= 1
 					if len(pushLogs) > 0 {
+						fmt.Printf("to s[%v] flag4\n", server)
 						earliestIndex := len(rf.Logs)
 						for index := rf.nextIndex[server] - 1; index >= 0; index-- {
-							if index < len(rf.Logs) && rf.Logs[index].CommandTerm < pushLogs[0].CommandTerm {
+							// 注意后面的-1,nextIndex改成了到前一个任期的最早的索引地址
+							if index < len(rf.Logs) && rf.Logs[index].CommandTerm < pushLogs[0].CommandTerm-1 {
 								// 要把数组下标转为Log内的下标CommendIndex
 								earliestIndex = index + 1
 								break
@@ -582,8 +588,12 @@ func (rf *Raft) pushLogsToFollower(server int) {
 						fmt.Printf("L[%v] push to s[%v] len:[%v] pushLen:[%v] pushNext:[%v]\n", rf.me, server, len(rf.Logs), len(pushLogs), followerNextIndex)
 						//rf.nextIndex[server] = earliestIndex
 					} else {
+						fmt.Printf("to s[%v] flag5\n", server)
 						rf.nextIndex[server] -= 1
 					}
+				}
+				if len(pushLogs) == 0 {
+					fmt.Printf("L[%v] push(end) empty log to s[%v] next:[%v] match:[%v]\n", rf.me, server, followerNextIndex, rf.matchIndex[server])
 				}
 				//fmt.Printf("L[%v] push log to F[%v] failed,Logs:[%v]\n", rf.me, server, pushLogs)
 			}
@@ -596,7 +606,6 @@ func (rf *Raft) pushLogsToFollower(server int) {
 // 给单个Follower推送新的Logs,如果nextIndex是1的话Follower无需Check
 func (rf *Raft) sendAppendEntries(logs []ApplyMsg, nextIndex int, server int) *AppendEntriesReply {
 	reply := &AppendEntriesReply{}
-	rf.mu.Lock()
 	args := &AppendEnTriesArgs{rf.CurrentTerm, rf.me, 0, 0, logs, rf.commitIndex}
 	if nextIndex > 1 {
 		// 如果新条目不是第一条日志
@@ -604,12 +613,13 @@ func (rf *Raft) sendAppendEntries(logs []ApplyMsg, nextIndex int, server int) *A
 	}
 	rf.mu.Unlock()
 	rf.peers[server].Call("Raft.AppendEntries", args, reply)
+	rf.mu.Lock()
 	return reply
 }
 
 // 持续发送心跳包给所有人
 func (rf *Raft) sendHeartBeatsToAll() {
-	// func : 发送单个心跳包
+	// func: 发送单个心跳包
 	sendHeartBeat := func(server int, args *AppendEnTriesArgs) bool {
 		reply := &AppendEntriesReply{}
 		ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
@@ -637,6 +647,7 @@ func (rf *Raft) sendHeartBeatsToAll() {
 		if len(rf.Logs) > 0 {
 			heartBeatArgs.PrevLogIndex = len(rf.Logs)
 			heartBeatArgs.PrevLogTerm = rf.Logs[len(rf.Logs)-1].CommandTerm
+			//fmt.Printf("L[%v] push heart args:%v %v\n", rf.me, heartBeatArgs, rf.Logs[len(rf.Logs)-1])
 		}
 		rf.mu.Unlock()
 		// 给除了自己以外的服务器发送心跳包
@@ -682,8 +693,7 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 	// 如果接收到的RPC请求或响应中,任期号T>CurrentTerm,那么就令currentTerm等于T,并且切换状态为Follower
 	if args.LeaderTerm > rf.CurrentTerm {
 		rf.transToFollower(args.LeaderTerm)
-		//fmt.Printf("s[%v] trans to Follower by L[%v] when receive AppendEntries\n",
-		//rf.me, args.LeaderIndex)
+		//fmt.Printf("s[%v] trans to Follower by L[%v] when receive AppendEntries\n", rf.me, args.LeaderIndex)
 	} else if args.LeaderTerm < rf.CurrentTerm {
 		// 不正常的包,Leader的Term小于Follower的Term
 		reply.Success = false
@@ -721,7 +731,7 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 	rf.role = Follower
 	rf.persist()
 	// 检查是否需要更新commitIndex, 最后一条Log的Term和Index必须和Leader对得上才能更新
-	if args.LeaderCommit > rf.commitIndex && len(rf.Logs) == args.PrevLogIndex && rf.Logs[len(rf.Logs)-1].CommandTerm == args.PrevLogTerm {
+	if len(args.Logs) == 0 && args.LeaderCommit > rf.commitIndex && len(rf.Logs) == args.PrevLogIndex && rf.Logs[len(rf.Logs)-1].CommandTerm == args.PrevLogTerm {
 		go rf.updateCommitIndex(int(math.Min(float64(args.LeaderCommit), float64(len(rf.Logs)))))
 	}
 }
