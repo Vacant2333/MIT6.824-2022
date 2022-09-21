@@ -61,12 +61,12 @@ const (
 	Candidate = 2
 	Leader    = 3
 
-	TickerSleepTime   = 20 * time.Millisecond  // Ticker 睡眠时间 ms
-	ElectionSleepTime = 30 * time.Millisecond  // 选举睡眠时间
+	TickerSleepTime   = 25 * time.Millisecond  // Ticker 睡眠时间 ms
+	ElectionSleepTime = 20 * time.Millisecond  // 选举睡眠时间
 	HeartBeatSendTime = 110 * time.Millisecond // 心跳包发送时间 ms
 
-	PushLogsTime           = 15 * time.Millisecond // Leader推送Log的间隔时间
-	checkCommittedLogsTime = 30 * time.Millisecond // Leader更新CommitIndex的间隔时间
+	PushLogsTime           = 20 * time.Millisecond // Leader推送Log的间隔时间
+	checkCommittedLogsTime = 40 * time.Millisecond // Leader更新CommitIndex的间隔时间
 
 	ElectionTimeOutMin = 150 // 选举超时时间(也用于检查是否需要开始选举) 区间
 	ElectionTimeOutMax = 300
@@ -541,9 +541,11 @@ func (rf *Raft) pushLogsToFollower(server int) {
 		if rf.matchIndex[server] < len(rf.Logs) {
 			followerNextIndex := rf.nextIndex[server]
 			pushLogs := make([]ApplyMsg, len(rf.Logs[followerNextIndex-1:]))
-			if len(pushLogs) == 0 {
-				fmt.Printf("L[%v] push(start) empty log to s[%v] next:[%v] match:[%v]\n", rf.me, server, followerNextIndex, rf.matchIndex[server])
-			}
+			/*
+				if len(pushLogs) == 0 {
+					fmt.Printf("L[%v] push(start) empty log to s[%v] next:[%v] match:[%v]\n", rf.me, server, followerNextIndex, rf.matchIndex[server])
+				}
+			*/
 			// 必须Copy不能直接传,不然会导致Race
 			copy(pushLogs, rf.Logs[followerNextIndex-1:])
 			pushLastIndex := len(rf.Logs)
@@ -570,26 +572,25 @@ func (rf *Raft) pushLogsToFollower(server int) {
 					if len(pushLogs) > 0 {
 						earliestIndex := len(rf.Logs)
 						for index := rf.nextIndex[server] - 1; index >= 0; index-- {
-							// 注意后面的-1,nextIndex改成了到前一个任期的最早的索引地址
-							if index < len(rf.Logs) && rf.Logs[index].CommandTerm < pushLogs[0].CommandTerm-1 {
+							if index < len(rf.Logs) && rf.Logs[index].CommandTerm < pushLogs[0].CommandTerm {
 								// 要把数组下标转为Log内的下标CommendIndex
 								earliestIndex = index + 1
 								break
 							}
 						}
 						newNextIndex := int(math.Min(float64(earliestIndex), float64(rf.nextIndex[server]-1)))
-						//newNextIndex := earliestIndex
 						fmt.Printf("L[%v] optimizi nextIndex[%v] Term[%v],[%v]->[%v]\n", rf.me, server, rf.Logs[newNextIndex-1].CommandTerm, rf.nextIndex[server], newNextIndex)
 						rf.nextIndex[server] = newNextIndex
 						fmt.Printf("L[%v] push to s[%v] len:[%v] pushLen:[%v] pushNext:[%v]\n", rf.me, server, len(rf.Logs), len(pushLogs), followerNextIndex)
-						//rf.nextIndex[server] = earliestIndex
 					} else {
 						rf.nextIndex[server] -= 1
 					}
 				}
-				if len(pushLogs) == 0 {
-					fmt.Printf("L[%v] push(end) empty log to s[%v] next:[%v] match:[%v]\n", rf.me, server, followerNextIndex, rf.matchIndex[server])
-				}
+				/*
+					if len(pushLogs) == 0 {
+						fmt.Printf("L[%v] push(end) empty log to s[%v] next:[%v] match:[%v]\n", rf.me, server, followerNextIndex, rf.matchIndex[server])
+					}
+				*/
 				//fmt.Printf("L[%v] push log to F[%v] failed,Logs:[%v]\n", rf.me, server, pushLogs)
 			}
 		}
@@ -726,7 +727,7 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 	rf.role = Follower
 	rf.persist()
 	// 检查是否需要更新commitIndex, 最后一条Log的Term和Index必须和Leader对得上才能更新
-	if len(rf.Logs) == 0 && args.LeaderCommit > rf.commitIndex && len(rf.Logs) == args.PrevLogIndex && rf.Logs[len(rf.Logs)-1].CommandTerm == args.PrevLogTerm {
+	if len(args.Logs) == 0 && args.LeaderCommit > rf.commitIndex && len(rf.Logs) == args.PrevLogIndex && rf.Logs[len(rf.Logs)-1].CommandTerm == args.PrevLogTerm {
 		rf.updateCommitIndex(int(math.Min(float64(args.LeaderCommit), float64(len(rf.Logs)))))
 	}
 }
