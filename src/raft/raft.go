@@ -492,18 +492,18 @@ func (rf *Raft) checkCommittedLogs() {
 			return
 		}
 		// 和Leader的Logs数量匹配的Server
-		matchServer := append(make([]int, 0), rf.me)
+		matchServerCount := 1
 		// Leader的最后一条Log的Index
 		lastLogIndex := len(rf.Logs)
 		for server := 0; server < len(rf.peers); server++ {
 			if server != rf.me {
 				if rf.matchIndex[server] == lastLogIndex {
-					matchServer = append(matchServer, server)
+					matchServerCount++
 				}
 			}
 		}
-		if len(matchServer) > (len(rf.peers)/2) && lastLogIndex > rf.commitIndex {
-			//fmt.Printf("L[%v] update commitIndex to [%v]\n", rf.me, lastLogIndex)
+		if matchServerCount > (len(rf.peers)/2) && lastLogIndex > rf.commitIndex {
+			fmt.Printf("L[%v] update commitIndex to [%v]\n", rf.me, lastLogIndex)
 			rf.updateCommitIndex(lastLogIndex)
 		}
 		rf.mu.Unlock()
