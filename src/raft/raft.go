@@ -511,12 +511,10 @@ func (rf *Raft) checkCommittedLogs() {
 	}
 }
 
-// 更新自己的commitIndex,用之前先检查
+// 更新自己的commitIndex,用之前先检查,并且要Lock
 func (rf *Raft) updateCommitIndex(commitIndex int) {
-	//rf.mu.Lock()
-	//defer rf.mu.Unlock()
 	if commitIndex > rf.commitIndex {
-		//fmt.Printf("s[%v] update commitIndex [%v]->[%v]\n", rf.me, rf.commitIndex, commitIndex)
+		fmt.Printf("s[%v] update commitIndex [%v]->[%v]\n", rf.me, rf.commitIndex, commitIndex)
 		for index := 0; index < commitIndex; index++ {
 			if rf.Logs[index].CommandValid == false {
 				rf.Logs[index].CommandValid = true
@@ -613,6 +611,7 @@ func (rf *Raft) sendAppendEntries(logs []ApplyMsg, nextIndex int, server int) *A
 	return reply
 }
 
+/*
 // 持续发送心跳包给所有人
 func (rf *Raft) sendHeartBeatsToAll() {
 	// func: 发送单个心跳包
@@ -650,6 +649,57 @@ func (rf *Raft) sendHeartBeatsToAll() {
 		for server := 0; server < len(rf.peers); server++ {
 			if server != rf.me {
 				go sendHeartBeat(server, heartBeatArgs)
+			}
+		}
+		time.Sleep(HeartBeatSendTime)
+	}
+}
+*/
+// 持续发送心跳包给所有人(LeaderCommit按Server的MatchIndex发)
+func (rf *Raft) sendHeartBeatsToAll() {
+	// func: 发送单个心跳包
+	sendHeartBeat := func(server int, args *AppendEnTriesArgs) bool {
+		reply := &AppendEntriesReply{}
+		ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
+		rf.mu.Lock()
+		defer rf.mu.Unlock()
+		// 如果接收到的RPC请求或响应中,任期号T>CurrentTerm,那么就令currentTerm等于T,并且切换状态为Follower
+		if reply.FollowerTerm > rf.CurrentTerm {
+			rf.transToFollower(reply.FollowerTerm)
+			//fmt.Printf("F[%v] trans to Follower because s[%v]'s Term bigger\n", rf.me, server)
+		}
+		return ok && reply.Success
+	}
+	// 发送心跳包,直到自己不为Leader
+	for rf.killed() == false {
+		rf.mu.Lock()
+		if rf.role != Leader {
+			// 如果现在不是Leader,停止发送心跳包
+			//fmt.Printf("F[%v] is not a leader now!\n", rf.me)
+			rf.mu.Unlock()
+			return
+		}
+		currentTerm := rf.CurrentTerm
+		rf.mu.Unlock()
+		// 给除了自己以外的服务器发送心跳包
+		for server := 0; server < len(rf.peers); server++ {
+			if server != rf.me {
+				rf.mu.Lock()
+				args := &AppendEnTriesArgs{
+					LeaderTerm:   currentTerm,
+					LeaderIndex:  rf.me,
+					PrevLogIndex: 0,
+					PrevLogTerm:  0,
+					Logs:         nil,
+					LeaderCommit: rf.matchIndex[server],
+				}
+				if rf.matchIndex[server] > 0 {
+					args.PrevLogTerm = rf.Logs[rf.matchIndex[server]-1].CommandTerm
+					args.PrevLogIndex = rf.matchIndex[server]
+				}
+
+				rf.mu.Unlock()
+				go sendHeartBeat(server, args)
 			}
 		}
 		time.Sleep(HeartBeatSendTime)
@@ -730,6 +780,9 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 	if len(args.Logs) == 0 && args.LeaderCommit > rf.commitIndex && len(rf.Logs) == args.PrevLogIndex && rf.Logs[len(rf.Logs)-1].CommandTerm == args.PrevLogTerm {
 		rf.updateCommitIndex(int(math.Min(float64(args.LeaderCommit), float64(len(rf.Logs)))))
 	}
+	//if len(args.Logs) == 0 && args.LeaderCommit > rf.commitIndex && len(rf.Logs) == args.PrevLogIndex && rf.Logs[len(rf.Logs)-1].CommandTerm == args.PrevLogTerm {
+	//	rf.updateCommitIndex(int(math.Min(float64(args.LeaderCommit), float64(len(rf.Logs)))))
+	//}
 }
 
 //
