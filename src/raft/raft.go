@@ -363,7 +363,7 @@ func (rf *Raft) ticker() {
 	for rf.killed() == false {
 		// 检查是否要开始领导选举,检查超时时间和角色,并且没有投票给别人
 		rf.mu.Lock()
-		fmt.Printf("s[%v] logs:%v s[%v]\n", rf.me, rf.Logs, rf.me)
+		//fmt.Printf("s[%v] logs:%v s[%v]\n", rf.me, rf.Logs, rf.me)
 		if rf.isHeartBeatTimeOut() && rf.VotedFor == -1 && rf.role == Follower {
 			go rf.startElection()
 		}
@@ -559,7 +559,7 @@ func (rf *Raft) pushLogsToFollower(server int) {
 				rf.transToFollower(pushReply.FollowerTerm)
 			} else {
 				// 推送失败,减少nextIndex且重试
-				if rf.nextIndex[server] > 1 {
+				if followerNextIndex > 1 {
 					/*
 						如果需要的话，算法可以通过减少被拒绝的附加日志 RPCs 的次数来优化。例如，当附加日志 RPC 的请
 						求被拒绝的时候，跟随者可以包含冲突的条目的任期号和自己存储的那个任期的最早的索引地址。借助
@@ -695,8 +695,8 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 		reply.Success = false
 		return
 	}
+	// AppendEntries Pack的检查和处理
 	if len(args.Logs) > 0 {
-		// 追加包检查和处理
 		// Follower接受到的Logs,已提交状态初始为False
 		for index := 0; index < len(args.Logs); index++ {
 			args.Logs[index].CommandValid = false
