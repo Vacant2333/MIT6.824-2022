@@ -161,7 +161,7 @@ func (rf *Raft) readPersist(data []byte) {
 		rf.CurrentTerm = currentTerm
 		rf.Logs = logs
 	}
-	//fmt.Printf("s[%v] readPersist logs:%v\n", rf.me, len(logs))
+	fmt.Printf("s[%v] readPersist logs:%v\n", rf.me, len(logs))
 }
 
 //
@@ -197,7 +197,7 @@ type RequestVoteArgs struct {
 	// 2B end
 }
 
-//
+// RequestVoteReply
 // example RequestVote RPC reply structure.
 // field names must start with capital letters!
 //
@@ -209,7 +209,7 @@ type RequestVoteReply struct {
 	// 2A end
 }
 
-//
+// RequestVote
 // example RequestVote RPC handler.
 //
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
@@ -310,7 +310,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	isLeader = rf.role == Leader
 	term = rf.CurrentTerm
 	if isLeader {
-		fmt.Printf("L[%v] Leader get a Start request[%v], len:[%v]\n", rf.me, command, rf.commitIndex+1)
 		index = len(rf.Logs) + 1
 		term = rf.CurrentTerm
 		log := ApplyMsg{}
@@ -318,6 +317,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		log.CommandIndex = index
 		log.CommandTerm = term
 		rf.Logs = append(rf.Logs, log)
+		fmt.Printf("L[%v] Leader get a Start request[%v], index:[%v]\n", rf.me, command, index)
 		rf.persist()
 	}
 	rf.mu.Unlock()
@@ -363,6 +363,7 @@ func (rf *Raft) ticker() {
 	for rf.killed() == false {
 		// 检查是否要开始领导选举,检查超时时间和角色,并且没有投票给别人
 		rf.mu.Lock()
+		fmt.Printf("s[%v] logs:%v s[%v]\n", rf.me, rf.Logs, rf.me)
 		if rf.isHeartBeatTimeOut() && rf.VotedFor == -1 && rf.role == Follower {
 			go rf.startElection()
 		}
@@ -391,8 +392,8 @@ func (rf *Raft) startElection() {
 	go rf.collectVotes()
 	// 检查结果
 	for rf.killed() == false {
-		voteCount := rf.getGrantedVotes()
 		rf.mu.Lock()
+		voteCount := rf.getGrantedVotes()
 		if voteCount > len(rf.peers)/2 {
 			// 1.赢得了大部分选票,成为Leader
 			//fmt.Printf("L[%v] is a Leader now\n", rf.me)
@@ -435,10 +436,8 @@ func (rf *Raft) startElection() {
 	}
 }
 
-// 获得当前已获得的选票数量
+// 获得当前已获得的选票数量,需要Lock的时候使用
 func (rf *Raft) getGrantedVotes() int {
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
 	count := 0
 	for server := 0; server < len(rf.peers); server++ {
 		if rf.peersVoteGranted[server] {
@@ -568,23 +567,24 @@ func (rf *Raft) pushLogsToFollower(server int) {
 						要一次附加条目 RPC 而不是每个条目一次。在实践中，我们十分怀疑这种优化是否是必要的，因为失败
 						是很少发生的并且也不大可能会有这么多不一致的日志。
 					*/
+					rf.nextIndex[server] = followerNextIndex - 1
 					//rf.nextIndex[server] -= 1
-					if len(pushLogs) > 0 {
-						earliestIndex := len(rf.Logs)
-						for index := rf.nextIndex[server] - 1; index >= 0; index-- {
-							if index < len(rf.Logs) && rf.Logs[index].CommandTerm < pushLogs[0].CommandTerm {
-								// 要把数组下标转为Log内的下标CommendIndex
-								earliestIndex = index + 1
-								break
-							}
-						}
-						newNextIndex := int(math.Min(float64(earliestIndex), float64(rf.nextIndex[server]-1)))
-						fmt.Printf("L[%v] optimizi nextIndex[%v] Term[%v],[%v]->[%v]\n", rf.me, server, rf.Logs[newNextIndex-1].CommandTerm, rf.nextIndex[server], newNextIndex)
-						rf.nextIndex[server] = newNextIndex
-						fmt.Printf("L[%v] push to s[%v] len:[%v] pushLen:[%v] pushNext:[%v]\n", rf.me, server, len(rf.Logs), len(pushLogs), followerNextIndex)
-					} else {
-						rf.nextIndex[server] -= 1
-					}
+					//if len(pushLogs) > 0 {
+					//	earliestIndex := len(rf.Logs)
+					//	for index := rf.nextIndex[server] - 1; index >= 0; index-- {
+					//		if index < len(rf.Logs) && rf.Logs[index].CommandTerm < pushLogs[0].CommandTerm {
+					//			// 要把数组下标转为Log内的下标CommendIndex
+					//			earliestIndex = index + 1
+					//			break
+					//		}
+					//	}
+					//	newNextIndex := int(math.Min(float64(earliestIndex), float64(rf.nextIndex[server]-1)))
+					//	fmt.Printf("L[%v] optimizi nextIndex[%v] Term[%v],[%v]->[%v]\n", rf.me, server, rf.Logs[newNextIndex-1].CommandTerm, rf.nextIndex[server], newNextIndex)
+					//	rf.nextIndex[server] = newNextIndex
+					//	fmt.Printf("L[%v] push to s[%v] len:[%v] pushLen:[%v] pushNext:[%v]\n", rf.me, server, len(rf.Logs), len(pushLogs), followerNextIndex)
+					//} else {
+					//	rf.nextIndex[server] -= 1
+					//}
 				}
 				/*
 					if len(pushLogs) == 0 {
