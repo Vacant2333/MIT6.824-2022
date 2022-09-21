@@ -65,8 +65,8 @@ const (
 	ElectionSleepTime = 30 * time.Millisecond  // 选举睡眠时间
 	HeartBeatSendTime = 110 * time.Millisecond // 心跳包发送时间 ms
 
-	PushLogsTime           = 10 * time.Millisecond // Leader推送Log的间隔时间
-	checkCommittedLogsTime = 15 * time.Millisecond // Leader更新CommitIndex的间隔时间
+	PushLogsTime           = 15 * time.Millisecond // Leader推送Log的间隔时间
+	checkCommittedLogsTime = 30 * time.Millisecond // Leader更新CommitIndex的间隔时间
 
 	ElectionTimeOutMin = 150 // 选举超时时间(也用于检查是否需要开始选举) 区间
 	ElectionTimeOutMax = 300
@@ -505,7 +505,7 @@ func (rf *Raft) checkCommittedLogs() {
 		}
 		if len(matchServer) > (len(rf.peers)/2) && lastLogIndex > rf.commitIndex {
 			//fmt.Printf("L[%v] update commitIndex to [%v]\n", rf.me, lastLogIndex)
-			go rf.updateCommitIndex(lastLogIndex)
+			rf.updateCommitIndex(lastLogIndex)
 		}
 		rf.mu.Unlock()
 		time.Sleep(checkCommittedLogsTime)
@@ -514,8 +514,8 @@ func (rf *Raft) checkCommittedLogs() {
 
 // 更新自己的commitIndex,用之前先检查
 func (rf *Raft) updateCommitIndex(commitIndex int) {
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
+	//rf.mu.Lock()
+	//defer rf.mu.Unlock()
 	if commitIndex > rf.commitIndex {
 		//fmt.Printf("s[%v] update commitIndex [%v]->[%v]\n", rf.me, rf.commitIndex, commitIndex)
 		for index := 0; index < commitIndex; index++ {
@@ -552,16 +552,13 @@ func (rf *Raft) pushLogsToFollower(server int) {
 				// 成功,更新next match Index
 				rf.nextIndex[server] = pushLastIndex + 1
 				rf.matchIndex[server] = pushLastIndex
-				fmt.Printf("to s[%v] flag1\n", server)
 				//fmt.Printf("L[%v] push log to F[%v] success,Logs:[%v]\n", rf.me, server, pushLogs)
 			} else if pushReply.FollowerTerm > rf.CurrentTerm {
 				// 如果接收到的RPC请求或响应中,任期号T>CurrentTerm,那么就令currentTerm等于T,并且切换状态为Follower
 				rf.transToFollower(pushReply.FollowerTerm)
-				fmt.Printf("to s[%v] flag2\n", server)
 			} else {
 				// 推送失败,减少nextIndex且重试
 				if rf.nextIndex[server] > 1 {
-					fmt.Printf("to s[%v] flag3\n", server)
 					/*
 						如果需要的话，算法可以通过减少被拒绝的附加日志 RPCs 的次数来优化。例如，当附加日志 RPC 的请
 						求被拒绝的时候，跟随者可以包含冲突的条目的任期号和自己存储的那个任期的最早的索引地址。借助
@@ -571,7 +568,6 @@ func (rf *Raft) pushLogsToFollower(server int) {
 					*/
 					//rf.nextIndex[server] -= 1
 					if len(pushLogs) > 0 {
-						fmt.Printf("to s[%v] flag4\n", server)
 						earliestIndex := len(rf.Logs)
 						for index := rf.nextIndex[server] - 1; index >= 0; index-- {
 							// 注意后面的-1,nextIndex改成了到前一个任期的最早的索引地址
@@ -588,7 +584,6 @@ func (rf *Raft) pushLogsToFollower(server int) {
 						fmt.Printf("L[%v] push to s[%v] len:[%v] pushLen:[%v] pushNext:[%v]\n", rf.me, server, len(rf.Logs), len(pushLogs), followerNextIndex)
 						//rf.nextIndex[server] = earliestIndex
 					} else {
-						fmt.Printf("to s[%v] flag5\n", server)
 						rf.nextIndex[server] -= 1
 					}
 				}
@@ -731,8 +726,8 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 	rf.role = Follower
 	rf.persist()
 	// 检查是否需要更新commitIndex, 最后一条Log的Term和Index必须和Leader对得上才能更新
-	if len(args.Logs) == 0 && args.LeaderCommit > rf.commitIndex && len(rf.Logs) == args.PrevLogIndex && rf.Logs[len(rf.Logs)-1].CommandTerm == args.PrevLogTerm {
-		go rf.updateCommitIndex(int(math.Min(float64(args.LeaderCommit), float64(len(rf.Logs)))))
+	if len(rf.Logs) == 0 && args.LeaderCommit > rf.commitIndex && len(rf.Logs) == args.PrevLogIndex && rf.Logs[len(rf.Logs)-1].CommandTerm == args.PrevLogTerm {
+		rf.updateCommitIndex(int(math.Min(float64(args.LeaderCommit), float64(len(rf.Logs)))))
 	}
 }
 
