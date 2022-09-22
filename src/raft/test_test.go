@@ -952,13 +952,12 @@ func TestFigure8Unreliable2C(t *testing.T) {
 			}
 		}
 	}
-
 	for i := 0; i < servers; i++ {
 		if cfg.connected[i] == false {
 			cfg.connect(i)
 		}
 	}
-	fmt.Println("Test:one")
+	//fmt.Println("Test:one")
 	cfg.one(rand.Int()%10000, servers, true)
 
 	cfg.end()
