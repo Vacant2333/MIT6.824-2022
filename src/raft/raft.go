@@ -516,9 +516,9 @@ func (rf *Raft) checkCommittedLogs() {
 		}
 		match := make([]int, len(rf.peers))
 		copy(match, rf.matchIndex)
-		match[rf.me] = rf.commitIndex
+		match[rf.me] = len(rf.Logs)
 		sort.Ints(match)
-		last := rf.commitIndex
+		last := len(rf.Logs)
 		for i := len(match) - 1; i >= 0; i-- {
 			count := 0
 			for j := len(match) - 1; j >= 0; j-- {
@@ -528,14 +528,11 @@ func (rf *Raft) checkCommittedLogs() {
 			}
 			if count > len(rf.peers)/2 {
 				last = match[i]
-				fmt.Println(match, i, last)
-				if last > 1 {
-					fmt.Println("last commit log:", rf.Logs[last-1], rf.CurrentTerm)
-				}
 				break
 			}
 		}
-		// todo: 只能Commit自己任期内的Log
+		//fmt.Println(rf.me, rf.matchIndex, match, rf.commitIndex)
+		// Leader只能提交自己任期的Log,也只能通过这种方式顺带提交之前未提交的Log
 		if last > rf.commitIndex && rf.Logs[last-1].CommandTerm == rf.CurrentTerm {
 			fmt.Printf("L[%v] update commitIndex to [%v]\n", rf.me, last)
 			rf.updateCommitIndex(last)
@@ -561,6 +558,66 @@ func (rf *Raft) updateCommitIndex(commitIndex int) {
 }
 
 // 给某个Follower持续不断的推送Logs
+//func (rf *Raft) pushLogsToFollower(server int) {
+//	for rf.killed() == false {
+//		rf.mu.Lock()
+//		if rf.role != Leader {
+//			// 如果不是Leader了 停止推送
+//			rf.mu.Unlock()
+//			return
+//		}
+//		if rf.matchIndex[server] < len(rf.Logs) {
+//			// todo:??不理解
+//			rf.nextIndex[server] = int(math.Min(float64(rf.nextIndex[server]), float64(len(rf.Logs))))
+//			followerNextIndex := rf.nextIndex[server]
+//			pushLogs := make([]ApplyMsg, len(rf.Logs[followerNextIndex-1:]))
+//			// 必须Copy不能直接传,不然会导致Race
+//			copy(pushLogs, rf.Logs[followerNextIndex-1:])
+//			pushLastIndex := len(rf.Logs)
+//			pushReply := rf.sendAppendEntries(pushLogs, followerNextIndex, server)
+//			if pushReply.Success {
+//				// 成功,更新next match Index
+//				rf.nextIndex[server] = pushLastIndex + 1
+//				rf.matchIndex[server] = pushLastIndex
+//				fmt.Println(rf.matchIndex)
+//				fmt.Printf("L[%v] push log to F[%v] success,Leader LogsLen:[%v] pushLast:[%v]\n", rf.me, server, len(rf.Logs), pushLastIndex)
+//			} else if pushReply.FollowerTerm > rf.CurrentTerm {
+//				// 如果接收到的RPC请求或响应中,任期号T>CurrentTerm,那么就令currentTerm等于T,并且切换状态为Follower
+//				rf.transToFollower(pushReply.FollowerTerm)
+//			} else {
+//				// 推送失败,减少nextIndex且重试
+//				if followerNextIndex > 1 {
+//					/*
+//						5.3:如果需要的话，算法可以通过减少被拒绝的附加日志 RPCs 的次数来优化。例如，当附加日志 RPC 的请
+//						求被拒绝的时候，跟随者可以包含冲突的条目的任期号和自己存储的那个任期的最早的索引地址。借助
+//						这些信息，领导人可以减小 nextIndex 越过所有那个任期冲突的所有日志条目；这样就变成每个任期需
+//						要一次附加条目 RPC 而不是每个条目一次。在实践中，我们十分怀疑这种优化是否是必要的，因为失败
+//						是很少发生的并且也不大可能会有这么多不一致的日志。
+//					*/
+//					if len(pushLogs) > 0 {
+//						earliestIndex := len(rf.Logs)
+//						for index := followerNextIndex - 1; index >= 0; index-- {
+//							if index < len(rf.Logs) && rf.Logs[index].CommandTerm < pushLogs[0].CommandTerm {
+//								// 要把数组下标转为Log内的下标CommendIndex
+//								earliestIndex = index + 1
+//								break
+//							}
+//						}
+//						newNextIndex := int(math.Min(float64(earliestIndex), float64(followerNextIndex-1)))
+//						fmt.Printf("L[%v] optimizi nextIndex[%v] Term[%v],[%v]->[%v]\n", rf.me, server, rf.Logs[newNextIndex-1].CommandTerm, rf.nextIndex[server], newNextIndex)
+//						rf.nextIndex[server] = newNextIndex
+//					} else {
+//						rf.nextIndex[server] = followerNextIndex - 1
+//					}
+//				}
+//				fmt.Printf("L[%v] push log to F[%v] failed,Leader LogsLen:[%v] pushLast:[%v] nextIndex:[%v]\n", rf.me, server, len(rf.Logs), pushLastIndex, followerNextIndex)
+//			}
+//		}
+//		rf.mu.Unlock()
+//		time.Sleep(PushLogsTime)
+//	}
+//}
+
 func (rf *Raft) pushLogsToFollower(server int) {
 	for rf.killed() == false {
 		rf.mu.Lock()
@@ -569,50 +626,60 @@ func (rf *Raft) pushLogsToFollower(server int) {
 			rf.mu.Unlock()
 			return
 		}
-		if rf.matchIndex[server] < len(rf.Logs) {
-			// todo:??不理解
-			rf.nextIndex[server] = int(math.Min(float64(rf.nextIndex[server]), float64(len(rf.Logs))))
-			followerNextIndex := rf.nextIndex[server]
-			pushLogs := make([]ApplyMsg, len(rf.Logs[followerNextIndex-1:]))
-			// 必须Copy不能直接传,不然会导致Race
-			copy(pushLogs, rf.Logs[followerNextIndex-1:])
-			pushLastIndex := len(rf.Logs)
-			pushReply := rf.sendAppendEntries(pushLogs, followerNextIndex, server)
-			if pushReply.Success {
-				// 成功,更新next match Index
-				rf.nextIndex[server] = pushLastIndex + 1
-				rf.matchIndex[server] = pushLastIndex
-				fmt.Printf("L[%v] push log to F[%v] success,Leader LogsLen:[%v] pushLast:[%v]\n", rf.me, server, len(rf.Logs), pushLastIndex)
-			} else if pushReply.FollowerTerm > rf.CurrentTerm {
-				// 如果接收到的RPC请求或响应中,任期号T>CurrentTerm,那么就令currentTerm等于T,并且切换状态为Follower
-				rf.transToFollower(pushReply.FollowerTerm)
-			} else {
-				// 推送失败,减少nextIndex且重试
-				if followerNextIndex > 1 {
-					/*
-						5.3:如果需要的话，算法可以通过减少被拒绝的附加日志 RPCs 的次数来优化。例如，当附加日志 RPC 的请
-						求被拒绝的时候，跟随者可以包含冲突的条目的任期号和自己存储的那个任期的最早的索引地址。借助
-						这些信息，领导人可以减小 nextIndex 越过所有那个任期冲突的所有日志条目；这样就变成每个任期需
-						要一次附加条目 RPC 而不是每个条目一次。在实践中，我们十分怀疑这种优化是否是必要的，因为失败
-						是很少发生的并且也不大可能会有这么多不一致的日志。
-					*/
-					if len(pushLogs) > 0 {
-						earliestIndex := len(rf.Logs)
-						for index := followerNextIndex - 1; index >= 0; index-- {
-							if index < len(rf.Logs) && rf.Logs[index].CommandTerm < pushLogs[0].CommandTerm {
-								// 要把数组下标转为Log内的下标CommendIndex
-								earliestIndex = index + 1
-								break
-							}
-						}
-						newNextIndex := int(math.Min(float64(earliestIndex), float64(followerNextIndex-1)))
-						fmt.Printf("L[%v] optimizi nextIndex[%v] Term[%v],[%v]->[%v]\n", rf.me, server, rf.Logs[newNextIndex-1].CommandTerm, rf.nextIndex[server], newNextIndex)
-						rf.nextIndex[server] = newNextIndex
-					} else {
-						rf.nextIndex[server] = followerNextIndex - 1
-					}
+		if len(rf.Logs) >= rf.nextIndex[server] {
+			// 如果失败了就直接重新发送
+			for retry := true; retry == true; {
+				retry = false
+				if rf.role != Leader {
+					rf.mu.Unlock()
+					return
 				}
-				fmt.Printf("L[%v] push log to F[%v] failed,Leader LogsLen:[%v] pushLast:[%v]\n", rf.me, server, len(rf.Logs), pushLastIndex)
+				followerNextIndex := int(math.Min(float64(rf.nextIndex[server]), float64(len(rf.Logs))))
+				pushLogs := make([]ApplyMsg, len(rf.Logs[followerNextIndex-1:]))
+				// 必须Copy不能直接传,不然会导致Race
+				copy(pushLogs, rf.Logs[followerNextIndex-1:])
+				pushLastIndex := len(rf.Logs)
+				pushReply := rf.sendAppendEntries(pushLogs, followerNextIndex, server)
+				if pushReply.Success {
+					// 成功,更新Follower的nextIndex,matchIndex
+					rf.nextIndex[server] = pushLastIndex + 1
+					rf.matchIndex[server] = pushLastIndex
+					fmt.Printf("L[%v] push log to F[%v] success,Leader LogsLen:[%v] pushLast:[%v]\n", rf.me, server, len(rf.Logs), pushLastIndex)
+				} else if pushReply.FollowerTerm > rf.CurrentTerm {
+					// 如果接收到的RPC请求或响应中,任期号T>CurrentTerm,那么就令currentTerm等于T,并且切换状态为Follower
+					rf.transToFollower(pushReply.FollowerTerm)
+					rf.mu.Unlock()
+					return
+				} else {
+					retry = true
+					// 推送失败,减少nextIndex且重试
+					if followerNextIndex > 1 {
+						/*
+							5.3:如果需要的话，算法可以通过减少被拒绝的附加日志 RPCs 的次数来优化。例如，当附加日志 RPC 的请
+							求被拒绝的时候，跟随者可以包含冲突的条目的任期号和自己存储的那个任期的最早的索引地址。借助
+							这些信息，领导人可以减小 nextIndex 越过所有那个任期冲突的所有日志条目；这样就变成每个任期需
+							要一次附加条目 RPC 而不是每个条目一次。在实践中，我们十分怀疑这种优化是否是必要的，因为失败
+							是很少发生的并且也不大可能会有这么多不一致的日志。
+						*/
+						if len(pushLogs) > 0 {
+							var index int
+							for index = followerNextIndex - 1; index >= 0; index-- {
+								if index < len(rf.Logs) && rf.Logs[index].CommandTerm < pushLogs[0].CommandTerm {
+									break
+								}
+							}
+							if index == -1 {
+								index = 0
+							}
+							newNextIndex := int(math.Min(float64(index+1), float64(followerNextIndex-1)))
+							fmt.Printf("L[%v] optimize nextIndex[%v] Term[%v],[%v]->[%v]\n", rf.me, server, rf.Logs[index].CommandTerm, rf.nextIndex[server], newNextIndex)
+							rf.nextIndex[server] = newNextIndex
+						} else {
+							rf.nextIndex[server] = followerNextIndex - 1
+						}
+					}
+					//fmt.Printf("L[%v] push log to F[%v] failed,Leader LogsLen:[%v] pushLast:[%v] nextIndex:[%v]\n", rf.me, server, len(rf.Logs), pushLastIndex, followerNextIndex)
+				}
 			}
 		}
 		rf.mu.Unlock()
@@ -631,8 +698,8 @@ func (rf *Raft) sendAppendEntries(logs []ApplyMsg, nextIndex int, server int) *A
 		LeaderCommit: rf.commitIndex,
 	}
 	reply := &AppendEntriesReply{}
+	// 如果新条目不是第一条日志,填入上一条的Index和Term
 	if nextIndex > 1 {
-		// 如果新条目不是第一条日志
 		args.PrevLogIndex, args.PrevLogTerm = nextIndex-1, rf.Logs[nextIndex-2].CommandTerm
 	}
 	rf.mu.Unlock()
@@ -736,13 +803,10 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 			// 如果是第一条Log不校验,persist在后面
 			rf.Logs = args.Logs
 			reply.Success = true
-			//rf.updateCommitIndex(int(math.Min(float64(args.LeaderCommit), float64(len(rf.Logs)))))
 		} else if args.PrevLogIndex <= len(rf.Logs) && rf.Logs[args.PrevLogIndex-1].CommandTerm == args.PrevLogTerm {
 			// 校验正常 可以正常追加,persist在后面 todo:???
 			rf.Logs = append(rf.Logs[:args.PrevLogIndex], args.Logs...)
-			//rf.Logs = append(rf.Logs, args.Logs...)
 			reply.Success = true
-			//rf.updateCommitIndex(int(math.Min(float64(args.LeaderCommit), float64(len(rf.Logs)))))
 		} else if args.PrevLogIndex <= len(rf.Logs) && rf.Logs[args.PrevLogIndex-1].CommandTerm != args.PrevLogTerm {
 			// 发生冲突,索引相同任期不同,删除从PrevLogIndex开始之后的所有Log
 			rf.Logs = rf.Logs[:args.PrevLogIndex-1]
@@ -760,10 +824,7 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 	rf.VotedFor = -1
 	rf.role = Follower
 	rf.persist()
-	// 检查是否需要更新commitIndex, 最后一条Log的Term和Index必须和Leader对得上才能更新 todo:似乎有点问题
-	//if len(args.Logs) == 0 && args.LeaderCommit > rf.commitIndex && len(rf.Logs) == args.PrevLogIndex && rf.Logs[len(rf.Logs)-1].CommandTerm == args.PrevLogTerm {
-	//	rf.updateCommitIndex(int(math.Min(float64(args.LeaderCommit), float64(len(rf.Logs)))))
-	//}
+	// commit似乎没问题
 	if args.LeaderCommit > rf.commitIndex && len(rf.Logs) == args.PrevLogIndex && rf.Logs[len(rf.Logs)-1].CommandTerm == args.PrevLogTerm {
 		rf.updateCommitIndex(int(math.Min(float64(args.LeaderCommit), float64(len(rf.Logs)))))
 	}
