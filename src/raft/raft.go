@@ -102,9 +102,8 @@ type Raft struct {
 	// 2B start
 	applyCh          chan ApplyMsg // 已提交的Log需要发送到这个Chan里
 	Logs             []ApplyMsg    // (持久化)日志条目;每个条目包含了用于状态机的命令,以及领导者接收到该条目时的任期(第一个索引为1)
-	commitIndex      int           // 日志中最后一条的log的下标(易失,初始为0)
+	commitIndex      int           // 日志中最后一条被提交的Log的下标(易失,初始为0)
 	lastAppliedIndex int           // 日志中被应用到状态机的最高一条的下标(易失,初始为0),用不到
-	leaderIndex      int           // Leader的index,用来重定向Start方法
 	nextIndex        []int         // (only Leader,成为Leader后初始化)对于每台服务器,发送的下一条log的索引(初始为Leader的最大索引+1)
 	matchIndex       []int         // (only Leader,成为Leader后初始化)对于每台服务器,已知的已复制到该服务器的最高索引(默认为0,单调递增)
 	// 2B end
@@ -225,17 +224,16 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	if args.CandidateTerm >= rf.CurrentTerm && (rf.VotedFor == -1 || rf.VotedFor == args.CandidateIndex) {
 		// Candidate的Log至少和自己一样新,才能给他投票
 		vote := false
-		if args.CandidateLastLogIndex == 0 && len(rf.Logs) == 0 {
-			// Candidate和自己都没有Log,可以直接投
-			vote = true
-		} else if args.CandidateLastLogIndex != 0 && len(rf.Logs) == 0 {
-			// Candidate有Log,自己没有,可以投
+		if len(rf.Logs) == 0 {
+			// 自己没有Log,Candidate不管有没有都可以投
 			vote = true
 		} else if args.CandidateLastLogTerm > rf.Logs[len(rf.Logs)-1].CommandTerm {
 			// 如果两份日志最后的条目的任期号不同,那么任期号大的日志更加新,在这里Candidate的最后一个Term大于Follower,可以投
+			fmt.Println(1, rf.me, args, len(rf.Logs))
 			vote = true
 		} else if args.CandidateLastLogTerm == rf.Logs[len(rf.Logs)-1].CommandTerm && args.CandidateLastLogIndex >= len(rf.Logs) {
 			// 如果两份日志最后的条目任期号相同,那么日志比较长的那个就更加新
+			fmt.Println(2, rf.me, args, len(rf.Logs))
 			vote = true
 		}
 		// 执行投票
@@ -340,6 +338,9 @@ func (rf *Raft) Kill() {
 	atomic.StoreInt32(&rf.dead, 1)
 	// Your code here, if desired.
 	rf.mu.Lock()
+	fmt.Printf("s[%v] dead! role:[%v], Term:[%v]"+
+		"\ncommitIndex:[%v] logsLen[%v]\n", rf.me, rf.role,
+		rf.CurrentTerm, rf.commitIndex, len(rf.Logs))
 	//fmt.Println("-----dead-----start")
 	//fmt.Printf("s[%v] dead! role:[%v], Leader:[%v] Term:[%v]"+
 	//	"\ncommitIndex:[%v] logsLen[%v]\nlogs:[%v]\n", rf.me, rf.role, rf.leaderIndex,
@@ -396,7 +397,7 @@ func (rf *Raft) startElection() {
 		voteCount := rf.getGrantedVotes()
 		if voteCount > len(rf.peers)/2 {
 			// 1.赢得了大部分选票,成为Leader
-			//fmt.Printf("L[%v] is a Leader now\n", rf.me)
+			fmt.Printf("L[%v] is a Leader now\n", rf.me)
 			rf.role = Leader
 			// 初始化Leader需要的内容
 			rf.nextIndex = make([]int, len(rf.peers))
@@ -515,11 +516,31 @@ func (rf *Raft) checkCommittedLogs() {
 func (rf *Raft) updateCommitIndex(commitIndex int) {
 	if commitIndex > rf.commitIndex {
 		fmt.Printf("s[%v] update commitIndex [%v]->[%v]\n", rf.me, rf.commitIndex, commitIndex)
+		is := false
+		if rf.role == Leader {
+			for index := commitIndex - 1; index >= 0; index-- {
+				if rf.Logs[index].CommandTerm == rf.CurrentTerm {
+					is = true
+				}
+			}
+		}
+
+		fmt.Printf("%v %v %v\n", rf.me, commitIndex, len(rf.Logs))
 		for index := 0; index < commitIndex; index++ {
 			if rf.Logs[index].CommandValid == false {
+				if rf.role == Leader {
+					if is == false {
+						fmt.Printf("L[%v] update commitIndex fail,not in its Term\n", rf.me)
+						break
+					}
+				}
 				rf.Logs[index].CommandValid = true
+				if index == commitIndex-1 {
+					fmt.Printf("s[%v] last log %v\n", rf.me, rf.Logs[len(rf.Logs)-1])
+				}
 				rf.applyCh <- rf.Logs[index]
 			}
+			// todo:break
 		}
 		rf.commitIndex = commitIndex
 		rf.persist()
@@ -565,30 +586,23 @@ func (rf *Raft) pushLogsToFollower(server int) {
 						要一次附加条目 RPC 而不是每个条目一次。在实践中，我们十分怀疑这种优化是否是必要的，因为失败
 						是很少发生的并且也不大可能会有这么多不一致的日志。
 					*/
-					rf.nextIndex[server] = followerNextIndex - 1
-					//rf.nextIndex[server] -= 1
-					//if len(pushLogs) > 0 {
-					//	earliestIndex := len(rf.Logs)
-					//	for index := rf.nextIndex[server] - 1; index >= 0; index-- {
-					//		if index < len(rf.Logs) && rf.Logs[index].CommandTerm < pushLogs[0].CommandTerm {
-					//			// 要把数组下标转为Log内的下标CommendIndex
-					//			earliestIndex = index + 1
-					//			break
-					//		}
-					//	}
-					//	newNextIndex := int(math.Min(float64(earliestIndex), float64(rf.nextIndex[server]-1)))
-					//	fmt.Printf("L[%v] optimizi nextIndex[%v] Term[%v],[%v]->[%v]\n", rf.me, server, rf.Logs[newNextIndex-1].CommandTerm, rf.nextIndex[server], newNextIndex)
-					//	rf.nextIndex[server] = newNextIndex
-					//	fmt.Printf("L[%v] push to s[%v] len:[%v] pushLen:[%v] pushNext:[%v]\n", rf.me, server, len(rf.Logs), len(pushLogs), followerNextIndex)
-					//} else {
-					//	rf.nextIndex[server] -= 1
-					//}
-				}
-				/*
-					if len(pushLogs) == 0 {
-						fmt.Printf("L[%v] push(end) empty log to s[%v] next:[%v] match:[%v]\n", rf.me, server, followerNextIndex, rf.matchIndex[server])
+					if len(pushLogs) > 0 {
+						earliestIndex := len(rf.Logs)
+						for index := followerNextIndex - 1; index >= 0; index-- {
+							if index < len(rf.Logs) && rf.Logs[index].CommandTerm < pushLogs[0].CommandTerm {
+								// 要把数组下标转为Log内的下标CommendIndex
+								earliestIndex = index + 1
+								break
+							}
+						}
+						newNextIndex := int(math.Min(float64(earliestIndex), float64(followerNextIndex-1)))
+						fmt.Printf("L[%v] optimizi nextIndex[%v] Term[%v],[%v]->[%v]\n", rf.me, server, rf.Logs[newNextIndex-1].CommandTerm, rf.nextIndex[server], newNextIndex)
+						rf.nextIndex[server] = newNextIndex
+						fmt.Printf("L[%v] push to s[%v] len:[%v] pushLen:[%v] pushNext:[%v]\n", rf.me, server, len(rf.Logs), len(pushLogs), followerNextIndex)
+					} else {
+						rf.nextIndex[server] -= 1
 					}
-				*/
+				}
 				//fmt.Printf("L[%v] push log to F[%v] failed,Logs:[%v]\n", rf.me, server, pushLogs)
 			}
 		}
@@ -777,8 +791,8 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 	rf.role = Follower
 	rf.persist()
 	// 检查是否需要更新commitIndex, 最后一条Log的Term和Index必须和Leader对得上才能更新
-	if len(args.Logs) == 0 && args.LeaderCommit > rf.commitIndex && len(rf.Logs) == args.PrevLogIndex && rf.Logs[len(rf.Logs)-1].CommandTerm == args.PrevLogTerm {
-		rf.updateCommitIndex(int(math.Min(float64(args.LeaderCommit), float64(len(rf.Logs)))))
+	if len(args.Logs) != 0 && args.LeaderCommit > rf.commitIndex && len(rf.Logs) == args.PrevLogIndex && rf.Logs[len(rf.Logs)-1].CommandTerm == args.PrevLogTerm {
+		rf.updateCommitIndex(int(math.Min(float64(args.LeaderCommit), float64(args.Logs[len(args.Logs)-1].CommandIndex))))
 	}
 	//if len(args.Logs) == 0 && args.LeaderCommit > rf.commitIndex && len(rf.Logs) == args.PrevLogIndex && rf.Logs[len(rf.Logs)-1].CommandTerm == args.PrevLogTerm {
 	//	rf.updateCommitIndex(int(math.Min(float64(args.LeaderCommit), float64(len(rf.Logs)))))
