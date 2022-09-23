@@ -489,35 +489,6 @@ func (rf *Raft) collectVotes() {
 	rf.mu.Unlock()
 }
 
-//// Leader持续更新自己的已提交logs
-//func (rf *Raft) checkCommittedLogs() {
-//	for rf.killed() == false {
-//		rf.mu.Lock()
-//		if rf.role != Leader {
-//			rf.mu.Unlock()
-//			return
-//		}
-//		// 和Leader的Logs数量匹配的Server
-//		matchServerCount := 1
-//		// Leader的最后一条Log的Index
-//		lastLogIndex := len(rf.Logs)
-//		for server := 0; server < len(rf.peers); server++ {
-//			if server != rf.me {
-//				if rf.matchIndex[server] == lastLogIndex {
-//					matchServerCount++
-//				}
-//			}
-//		}
-//		// todo: 只能Commit自己任期内的Log
-//		if matchServerCount > (len(rf.peers)/2) && lastLogIndex > rf.commitIndex && rf.Logs[lastLogIndex-1].CommandTerm == rf.CurrentTerm {
-//			fmt.Printf("L[%v] update commitIndex to [%v]\n", rf.me, lastLogIndex)
-//			rf.updateCommitIndex(lastLogIndex)
-//		}
-//		rf.mu.Unlock()
-//		time.Sleep(checkCommittedLogsTime)
-//	}
-//}
-
 // Leader持续更新自己的已提交logs
 func (rf *Raft) checkCommittedLogs() {
 	for rf.killed() == false {
@@ -601,24 +572,22 @@ func (rf *Raft) pushLogsToFollower(server int) {
 				rf.mu.Unlock()
 				return
 			} else {
-				// 推送失败,减少nextIndex且重试
+				// 推送失败,减少nextIndex且重试 todo:检查超时
 				retry = true
-				//fmt.Printf("L[%v] push log to F[%v] failed,Leader LogsLen:[%v] LogTerm:[%v] pushLast:[%v] nextIndex:[%v]\n", rf.me, server, len(rf.Logs), pushReply.XTerm, pushLastIndex, followerNextIndex)
 				if pushReply.XTerm != -1 {
 					if index, ok := rf.termIndex[pushReply.XTerm]; ok {
 						// Leader有对应Term的Log
 						rf.nextIndex[server] = index
-						fmt.Println(2)
+						fmt.Println(2, "S:", server, "nextIndex:", rf.nextIndex[server], "XTerm:", pushReply.XTerm)
 					} else {
 						// Leader没有对应Term的Log
-						fmt.Println(1)
 						rf.nextIndex[server] = pushReply.XIndex
+						fmt.Println(1, "S:", server, "nextIndex:", rf.nextIndex[server], "XTerm:", pushReply.XTerm)
 					}
 				} else {
 					// Follower的日志太短了
-					//rf.nextIndex[server] = pushLastIndex - pushReply.XLen
 					rf.nextIndex[server] = pushReply.XLen + 1
-					fmt.Println(3)
+					fmt.Println(3, "S:", server, "nextIndex:", rf.nextIndex[server], "XTerm:", pushReply.XTerm)
 				}
 			}
 		}
@@ -756,7 +725,6 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 			reply.Success = true
 		} else if args.PrevLogIndex <= len(rf.Logs) && rf.Logs[args.PrevLogIndex-1].CommandTerm != args.PrevLogTerm {
 			// 发生冲突,索引相同任期不同,删除从PrevLogIndex开始之后的所有Log
-
 			reply.XTerm = rf.Logs[args.PrevLogIndex-1].CommandTerm
 			for i := 0; i < len(rf.Logs); i++ {
 				if rf.Logs[i].CommandTerm == reply.XTerm {
@@ -765,16 +733,14 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 				}
 			}
 			reply.XLen = -1
-
 			rf.Logs = rf.Logs[:args.PrevLogIndex-1]
 			reply.Success = false
 			rf.persist()
 			return
 		} else {
-			// 校验失败.Follower在Pre的位置没有条目
+			// 校验失败.Follower在PreLogIndex的位置没有条目
 			reply.XTerm = -1
 			reply.XIndex = -1
-			//reply.XLen = args.PrevLogIndex - len(rf.Logs)
 			reply.XLen = len(rf.Logs)
 			reply.Success = false
 			return
