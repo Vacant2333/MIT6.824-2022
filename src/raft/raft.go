@@ -620,14 +620,19 @@ func (rf *Raft) updateCommitIndex(commitIndex int) {
 
 func (rf *Raft) pushLogsToFollower(server int) {
 	for rf.killed() == false {
+		retry := false
 		rf.mu.Lock()
 		if rf.role != Leader {
 			// 如果不是Leader了 停止推送
 			rf.mu.Unlock()
 			return
 		}
-		if len(rf.Logs) >= rf.nextIndex[server] {
-		lab1:
+		if len(rf.Logs) >= rf.nextIndex[server] || retry {
+			if rf.role != Leader {
+				// 如果不是Leader了 停止推送
+				rf.mu.Unlock()
+				return
+			}
 			followerNextIndex := int(math.Min(float64(rf.nextIndex[server]), float64(len(rf.Logs))))
 			pushLogs := make([]ApplyMsg, len(rf.Logs[followerNextIndex-1:]))
 			// 必须Copy不能直接传,不然会导致Race
@@ -639,6 +644,7 @@ func (rf *Raft) pushLogsToFollower(server int) {
 				rf.nextIndex[server] = pushLastIndex + 1
 				rf.matchIndex[server] = pushLastIndex
 				fmt.Printf("L[%v] push log to F[%v] success,Leader LogsLen:[%v] pushLast:[%v]\n", rf.me, server, len(rf.Logs), pushLastIndex)
+				retry = false
 			} else if pushReply.FollowerTerm > rf.CurrentTerm {
 				// 如果接收到的RPC请求或响应中,任期号T>CurrentTerm,那么就令currentTerm等于T,并且切换状态为Follower
 				rf.transToFollower(pushReply.FollowerTerm)
@@ -646,6 +652,7 @@ func (rf *Raft) pushLogsToFollower(server int) {
 				return
 			} else {
 				// 推送失败,减少nextIndex且重试
+				retry = true
 				if followerNextIndex > 1 {
 					/*
 						5.3:如果需要的话，算法可以通过减少被拒绝的附加日志 RPCs 的次数来优化。例如，当附加日志 RPC 的请
@@ -672,9 +679,7 @@ func (rf *Raft) pushLogsToFollower(server int) {
 					}
 				}
 				//fmt.Printf("L[%v] push log to F[%v] failed,Leader LogsLen:[%v] pushLast:[%v] nextIndex:[%v]\n", rf.me, server, len(rf.Logs), pushLastIndex, followerNextIndex)
-				goto lab1
 			}
-
 		}
 		rf.mu.Unlock()
 		time.Sleep(PushLogsTime)
