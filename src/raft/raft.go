@@ -66,7 +66,7 @@ const (
 	ElectionSleepTime = 10 * time.Millisecond  // 选举睡眠时间
 	HeartBeatSendTime = 100 * time.Millisecond // 心跳包发送时间 ms
 
-	PushLogsTime           = 10 * time.Millisecond // Leader推送Log的间隔时间
+	PushLogsTime           = 2 * time.Millisecond  // Leader推送Log的间隔时间
 	checkCommittedLogsTime = 30 * time.Millisecond // Leader更新CommitIndex的间隔时间
 
 	ElectionTimeOutMin = 150 // 选举超时时间(也用于检查是否需要开始选举) 区间
@@ -519,6 +519,7 @@ func (rf *Raft) checkCommittedLogs() {
 		match[rf.me] = len(rf.Logs)
 		sort.Ints(match)
 		last := len(rf.Logs)
+		//fmt.Println("matchIndex:", rf.matchIndex, rf.me)
 		for i := len(match) - 1; i >= 0; i-- {
 			count := 0
 			for j := len(match) - 1; j >= 0; j-- {
@@ -619,8 +620,9 @@ func (rf *Raft) updateCommitIndex(commitIndex int) {
 //}
 
 func (rf *Raft) pushLogsToFollower(server int) {
+	// 如果推送失败就要立即Retry
+	retry := false
 	for rf.killed() == false {
-		retry := false
 		rf.mu.Lock()
 		if rf.role != Leader {
 			// 如果不是Leader了 停止推送
@@ -628,11 +630,6 @@ func (rf *Raft) pushLogsToFollower(server int) {
 			return
 		}
 		if len(rf.Logs) >= rf.nextIndex[server] || retry {
-			if rf.role != Leader {
-				// 如果不是Leader了 停止推送
-				rf.mu.Unlock()
-				return
-			}
 			followerNextIndex := int(math.Min(float64(rf.nextIndex[server]), float64(len(rf.Logs))))
 			pushLogs := make([]ApplyMsg, len(rf.Logs[followerNextIndex-1:]))
 			// 必须Copy不能直接传,不然会导致Race
@@ -671,14 +668,16 @@ func (rf *Raft) pushLogsToFollower(server int) {
 						if index == -1 {
 							index = 0
 						}
-						newNextIndex := int(math.Min(float64(index+1), float64(followerNextIndex-1)))
+						//newNextIndex := int(math.Min(float64(index+1), float64(followerNextIndex-1)))
+						newNextIndex := index + 1
 						fmt.Printf("L[%v] optimize nextIndex[%v] Term[%v],[%v]->[%v]\n", rf.me, server, rf.Logs[index].CommandTerm, rf.nextIndex[server], newNextIndex)
 						rf.nextIndex[server] = newNextIndex
 					} else {
 						rf.nextIndex[server] = followerNextIndex - 1
 					}
 				}
-				//fmt.Printf("L[%v] push log to F[%v] failed,Leader LogsLen:[%v] pushLast:[%v] nextIndex:[%v]\n", rf.me, server, len(rf.Logs), pushLastIndex, followerNextIndex)
+				fmt.Printf("L[%v] push log to F[%v] failed,Leader LogsLen:[%v] pushLast:[%v] nextIndex:[%v]\n", rf.me, server, len(rf.Logs), pushLastIndex, followerNextIndex)
+				fmt.Println(server, rf.nextIndex[server])
 			}
 		}
 		rf.mu.Unlock()
