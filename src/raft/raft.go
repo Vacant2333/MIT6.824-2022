@@ -66,7 +66,7 @@ const (
 	ElectionSleepTime = 10 * time.Millisecond  // 选举睡眠时间
 	HeartBeatSendTime = 100 * time.Millisecond // 心跳包发送时间 ms
 
-	PushLogsTime           = 2 * time.Millisecond  // Leader推送Log的间隔时间
+	PushLogsTime           = 1 * time.Millisecond  // Leader推送Log的间隔时间
 	checkCommittedLogsTime = 30 * time.Millisecond // Leader更新CommitIndex的间隔时间
 
 	ElectionTimeOutMin = 150 // 选举超时时间(也用于检查是否需要开始选举) 区间
@@ -107,6 +107,7 @@ type Raft struct {
 	lastAppliedIndex int           // 日志中被应用到状态机的最高一条的下标(易失,初始为0)
 	nextIndex        []int         // (only Leader,成为Leader后初始化)对于每台服务器,发送的下一条log的索引(初始为Leader的最大索引+1)
 	matchIndex       []int         // (only Leader,成为Leader后初始化)对于每台服务器,已知的已复制到该服务器的最高索引(默认为0,单调递增)
+	termIndex        map[int]int
 	// 2B end
 }
 
@@ -309,6 +310,9 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		rf.Logs = append(rf.Logs, log)
 		//fmt.Printf("L[%v] Leader get a Start request[%v], index:[%v]\n", rf.me, command, index)
 		rf.persist()
+		if _, ok := rf.termIndex[term]; ok == false {
+			rf.termIndex[term] = index
+		}
 	}
 	rf.mu.Unlock()
 	// 2B end
@@ -400,6 +404,14 @@ func (rf *Raft) startElection() {
 					go rf.pushLogsToFollower(server)
 				}
 			}
+
+			rf.termIndex = make(map[int]int)
+			for i := 0; i < len(rf.Logs); i++ {
+				if _, ok := rf.termIndex[rf.Logs[i].CommandTerm]; ok == false {
+					rf.termIndex[rf.Logs[i].CommandTerm] = i + 1
+				}
+			}
+
 			//rf.persist()
 			rf.mu.Unlock()
 			// 持续发送心跳包
@@ -569,8 +581,9 @@ func (rf *Raft) pushLogsToFollower(server int) {
 			return
 		}
 		if len(rf.Logs) >= rf.nextIndex[server] || retry {
+			followerNextIndex := int(math.Max(float64(rf.nextIndex[server]), 1))
 			//followerNextIndex := int(math.Min(float64(rf.nextIndex[server]), float64(len(rf.Logs))))
-			followerNextIndex := rf.nextIndex[server]
+			//followerNextIndex := rf.nextIndex[server]
 			pushLogs := make([]ApplyMsg, len(rf.Logs[followerNextIndex-1:]))
 			// 必须Copy不能直接传,不然会导致Race
 			copy(pushLogs, rf.Logs[followerNextIndex-1:])
@@ -590,16 +603,22 @@ func (rf *Raft) pushLogsToFollower(server int) {
 			} else {
 				// 推送失败,减少nextIndex且重试
 				retry = true
-				fmt.Printf("L[%v] push log to F[%v] failed,Leader LogsLen:[%v] pushLast:[%v] nextIndex:[%v]\n", rf.me, server, len(rf.Logs), pushLastIndex, followerNextIndex)
-				if followerNextIndex > 1 {
-					/*
-						5.3:如果需要的话，算法可以通过减少被拒绝的附加日志 RPCs 的次数来优化。例如，当附加日志 RPC 的请
-						求被拒绝的时候，跟随者可以包含冲突的条目的任期号和自己存储的那个任期的最早的索引地址。借助
-						这些信息，领导人可以减小 nextIndex 越过所有那个任期冲突的所有日志条目；这样就变成每个任期需
-						要一次附加条目 RPC 而不是每个条目一次。在实践中，我们十分怀疑这种优化是否是必要的，因为失败
-						是很少发生的并且也不大可能会有这么多不一致的日志。
-					*/
-
+				//fmt.Printf("L[%v] push log to F[%v] failed,Leader LogsLen:[%v] LogTerm:[%v] pushLast:[%v] nextIndex:[%v]\n", rf.me, server, len(rf.Logs), pushReply.XTerm, pushLastIndex, followerNextIndex)
+				if pushReply.XTerm != -1 {
+					if index, ok := rf.termIndex[pushReply.XTerm]; ok {
+						// Leader有对应Term的Log
+						rf.nextIndex[server] = index
+						fmt.Println(2)
+					} else {
+						// Leader没有对应Term的Log
+						fmt.Println(1)
+						rf.nextIndex[server] = pushReply.XIndex
+					}
+				} else {
+					// Follower的日志太短了
+					//rf.nextIndex[server] = pushLastIndex - pushReply.XLen
+					rf.nextIndex[server] = pushReply.XLen + 1
+					fmt.Println(3)
 				}
 			}
 		}
@@ -624,10 +643,11 @@ func (rf *Raft) sendAppendEntries(logs []ApplyMsg, nextIndex int, server int) *A
 		args.PrevLogIndex, args.PrevLogTerm = nextIndex-1, rf.Logs[nextIndex-2].CommandTerm
 	}
 	rf.mu.Unlock()
-	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
-	if ok == false {
-		fmt.Println("ok=false", server, args, reply)
-	}
+	rf.peers[server].Call("Raft.AppendEntries", args, reply)
+	//ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
+	//if ok == false {
+	//	fmt.Println("ok=false", server, args, reply)
+	//}
 	rf.mu.Lock()
 	return reply
 }
@@ -702,6 +722,9 @@ type AppendEnTriesArgs struct {
 type AppendEntriesReply struct {
 	FollowerTerm int  // Follower的Term,给Leader更新自己的Term
 	Success      bool // 是否推送成功
+	XTerm        int
+	XIndex       int
+	XLen         int
 }
 
 // AppendEntries Follower接收Leader的追加/心跳包
@@ -733,14 +756,26 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 			reply.Success = true
 		} else if args.PrevLogIndex <= len(rf.Logs) && rf.Logs[args.PrevLogIndex-1].CommandTerm != args.PrevLogTerm {
 			// 发生冲突,索引相同任期不同,删除从PrevLogIndex开始之后的所有Log
-			preLen := len(rf.Logs)
+
+			reply.XTerm = rf.Logs[args.PrevLogIndex-1].CommandTerm
+			for i := 0; i < len(rf.Logs); i++ {
+				if rf.Logs[i].CommandTerm == reply.XTerm {
+					reply.XIndex = i + 1
+					break
+				}
+			}
+			reply.XLen = -1
+
 			rf.Logs = rf.Logs[:args.PrevLogIndex-1]
-			fmt.Printf("S[%v] pushLen[%v],LogsLen changed:[%v]->[%v]\n", rf.me, len(args.Logs), preLen, len(rf.Logs))
 			reply.Success = false
 			rf.persist()
 			return
 		} else {
-			// 校验失败
+			// 校验失败.Follower在Pre的位置没有条目
+			reply.XTerm = -1
+			reply.XIndex = -1
+			//reply.XLen = args.PrevLogIndex - len(rf.Logs)
+			reply.XLen = len(rf.Logs)
 			reply.Success = false
 			return
 		}
