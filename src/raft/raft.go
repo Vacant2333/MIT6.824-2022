@@ -64,10 +64,10 @@ const (
 
 	TickerSleepTime   = 25 * time.Millisecond  // Ticker 睡眠时间 ms
 	ElectionSleepTime = 10 * time.Millisecond  // 选举睡眠时间
-	HeartBeatSendTime = 100 * time.Millisecond // 心跳包发送时间 ms
+	HeartBeatSendTime = 115 * time.Millisecond // 心跳包发送时间 ms
 
-	PushLogsTime           = 2 * time.Millisecond  // Leader推送Log的间隔时间
-	checkCommittedLogsTime = 30 * time.Millisecond // Leader更新CommitIndex的间隔时间
+	PushLogsTime           = 3 * time.Millisecond  // Leader推送Log的间隔时间
+	checkCommittedLogsTime = 35 * time.Millisecond // Leader更新CommitIndex的间隔时间
 
 	ElectionTimeOutMin = 350 // 选举超时时间(也用于检查是否需要开始选举) 区间
 	ElectionTimeOutMax = 700
