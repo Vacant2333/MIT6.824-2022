@@ -601,7 +601,6 @@ func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 				time.Sleep(20 * time.Millisecond)
 			}
 			if retry == false {
-				//fmt.Println("Test:retry")
 				cfg.t.Fatalf("one(%v) failed to reach agreement", cmd)
 			}
 		} else {
@@ -615,6 +614,7 @@ func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 	return -1
 }
 
+// 辅助函数
 func (cfg *config) printLogs() {
 	for i := 0; i < len(cfg.rafts); i++ {
 		fmt.Printf("Test:s[%v] Logs:[%v]\n", i, cfg.rafts[i].Logs)

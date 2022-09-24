@@ -62,15 +62,15 @@ const (
 	Candidate = 2
 	Leader    = 3
 
-	TickerSleepTime   = 25 * time.Millisecond  // Ticker 睡眠时间 ms
-	ElectionSleepTime = 10 * time.Millisecond  // 选举睡眠时间
-	HeartBeatSendTime = 100 * time.Millisecond // 心跳包发送时间 ms
+	TickerSleepTime   = 40 * time.Millisecond  // Ticker 睡眠时间 ms
+	ElectionSleepTime = 30 * time.Millisecond  // 选举睡眠时间
+	HeartBeatSendTime = 125 * time.Millisecond // 心跳包发送时间 ms
 
-	PushLogsTime           = 1 * time.Millisecond  // Leader推送Log的间隔时间
+	PushLogsTime           = 5 * time.Millisecond  // Leader推送Log的间隔时间
 	checkCommittedLogsTime = 30 * time.Millisecond // Leader更新CommitIndex的间隔时间
 
 	ElectionTimeOutMin = 150 // 选举超时时间(也用于检查是否需要开始选举) 区间
-	ElectionTimeOutMax = 300
+	ElectionTimeOutMax = 320
 )
 
 // 获得一个随机选举超时时间
@@ -139,7 +139,6 @@ func (rf *Raft) persist() {
 	encoder.Encode(rf.Logs)
 	data := writer.Bytes()
 	rf.persister.SaveRaftState(data)
-	//fmt.Printf("s[%v] persist\n", rf.me)
 }
 
 //
@@ -156,7 +155,7 @@ func (rf *Raft) readPersist(data []byte) {
 	if decoder.Decode(&votedFor) != nil ||
 		decoder.Decode(&currentTerm) != nil ||
 		decoder.Decode(&logs) != nil {
-		//fmt.Printf("s[%v] readPersist error\n", rf.me)
+		fmt.Printf("s[%v] readPersist error\n", rf.me)
 	} else {
 		rf.VotedFor = votedFor
 		rf.CurrentTerm = currentTerm
@@ -356,10 +355,12 @@ func (rf *Raft) killed() bool {
 func (rf *Raft) ticker() {
 	for rf.killed() == false {
 		rf.mu.Lock()
+		//fmt.Println("match:", rf.matchIndex)
 		// 检查是否要开始领导选举,检查超时时间和角色,并且没有投票给别人
 		if rf.isHeartBeatTimeOut() && rf.VotedFor == -1 && rf.role == Follower {
 			rf.mu.Unlock()
 			rf.startElection()
+			fmt.Println(rf.me, "start election")
 		} else {
 			rf.mu.Unlock()
 		}
@@ -404,14 +405,12 @@ func (rf *Raft) startElection() {
 					go rf.pushLogsToFollower(server)
 				}
 			}
-
 			rf.termIndex = make(map[int]int)
 			for i := 0; i < len(rf.Logs); i++ {
 				if _, ok := rf.termIndex[rf.Logs[i].CommandTerm]; ok == false {
 					rf.termIndex[rf.Logs[i].CommandTerm] = i + 1
 				}
 			}
-
 			//rf.persist()
 			rf.mu.Unlock()
 			// 持续发送心跳包
@@ -552,14 +551,13 @@ func (rf *Raft) pushLogsToFollower(server int) {
 			return
 		}
 		if len(rf.Logs) >= rf.nextIndex[server] || retry {
+			// nextIndex最小要为1
 			followerNextIndex := int(math.Max(float64(rf.nextIndex[server]), 1))
-			//followerNextIndex := int(math.Min(float64(rf.nextIndex[server]), float64(len(rf.Logs))))
-			//followerNextIndex := rf.nextIndex[server]
 			pushLogs := make([]ApplyMsg, len(rf.Logs[followerNextIndex-1:]))
 			// 必须Copy不能直接传,不然会导致Race
 			copy(pushLogs, rf.Logs[followerNextIndex-1:])
 			pushLastIndex := len(rf.Logs)
-			pushReply := rf.sendAppendEntries(pushLogs, followerNextIndex, server)
+			pushOk, pushReply := rf.sendAppendEntries(pushLogs, followerNextIndex, server)
 			if pushReply.Success {
 				// 成功,更新Follower的nextIndex,matchIndex
 				retry = false
@@ -571,17 +569,25 @@ func (rf *Raft) pushLogsToFollower(server int) {
 				rf.transToFollower(pushReply.FollowerTerm)
 				rf.mu.Unlock()
 				return
-			} else {
-				// 推送失败,减少nextIndex且重试 todo:检查超时
+			} else if pushOk {
+				// 推送失败但是请求成功,减少nextIndex且重试 todo:检查超时
 				retry = true
+				if followerNextIndex != rf.nextIndex[server] {
+					fmt.Printf("s[%v] continue\n", server)
+					rf.mu.Unlock()
+					continue
+				}
+				old := rf.nextIndex[server]
 				if pushReply.XTerm != -1 {
 					if index, ok := rf.termIndex[pushReply.XTerm]; ok {
 						// Leader有对应Term的Log
+						fmt.Println(rf.termIndex, pushReply.XTerm)
 						rf.nextIndex[server] = index
 						fmt.Println(2, "S:", server, "nextIndex:", rf.nextIndex[server], "XTerm:", pushReply.XTerm)
 					} else {
 						// Leader没有对应Term的Log
 						rf.nextIndex[server] = pushReply.XIndex
+						fmt.Println(pushReply.XTerm, rf.termIndex)
 						fmt.Println(1, "S:", server, "nextIndex:", rf.nextIndex[server], "XTerm:", pushReply.XTerm)
 					}
 				} else {
@@ -589,6 +595,10 @@ func (rf *Raft) pushLogsToFollower(server int) {
 					rf.nextIndex[server] = pushReply.XLen + 1
 					fmt.Println(3, "S:", server, "nextIndex:", rf.nextIndex[server], "XTerm:", pushReply.XTerm)
 				}
+				fmt.Printf("s[%v] nextIndex:[%v]->[%v]\n", server, old, rf.nextIndex[server])
+			} else {
+				// 推送请求失败,可能服务器挂了或者超时
+				retry = true
 			}
 		}
 		rf.mu.Unlock()
@@ -597,7 +607,7 @@ func (rf *Raft) pushLogsToFollower(server int) {
 }
 
 // 给单个Follower推送新的Logs,如果nextIndex是1的话Follower无需Check,要Lock的时候使用
-func (rf *Raft) sendAppendEntries(logs []ApplyMsg, nextIndex int, server int) *AppendEntriesReply {
+func (rf *Raft) sendAppendEntries(logs []ApplyMsg, nextIndex int, server int) (bool, *AppendEntriesReply) {
 	args := &AppendEnTriesArgs{
 		LeaderTerm:   rf.CurrentTerm,
 		LeaderIndex:  rf.me,
@@ -612,13 +622,11 @@ func (rf *Raft) sendAppendEntries(logs []ApplyMsg, nextIndex int, server int) *A
 		args.PrevLogIndex, args.PrevLogTerm = nextIndex-1, rf.Logs[nextIndex-2].CommandTerm
 	}
 	rf.mu.Unlock()
-	rf.peers[server].Call("Raft.AppendEntries", args, reply)
-	//ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
-	//if ok == false {
-	//	fmt.Println("ok=false", server, args, reply)
-	//}
+	start := time.Now()
+	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
+	fmt.Println("push time:", server, time.Now().Sub(start).Milliseconds())
 	rf.mu.Lock()
-	return reply
+	return ok, reply
 }
 
 // 持续发送心跳包给所有人
@@ -654,6 +662,7 @@ func (rf *Raft) sendHeartBeatsToAll() {
 			Logs:         nil,
 			LeaderCommit: rf.commitIndex,
 		}
+		// 给Prev赋能:)
 		if len(rf.Logs) > 0 {
 			heartBeatArgs.PrevLogIndex = len(rf.Logs)
 			heartBeatArgs.PrevLogTerm = rf.Logs[len(rf.Logs)-1].CommandTerm
@@ -709,6 +718,10 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 		reply.Success = false
 		return
 	}
+	// 检查没有问题,不管是不是心跳包,更新选举超时时间
+	rf.heartBeatTimeOut = time.Now().Add(getRandElectionTimeOut())
+	rf.VotedFor = -1
+	rf.role = Follower
 	// AppendEntries Pack的检查和处理
 	if len(args.Logs) > 0 {
 		// Follower接受到的Logs,已提交状态初始为False todo:commit的不要设
@@ -746,10 +759,6 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 			return
 		}
 	}
-	// 检查没有问题,不管是不是心跳包,更新选举超时时间
-	rf.heartBeatTimeOut = time.Now().Add(getRandElectionTimeOut())
-	rf.VotedFor = -1
-	rf.role = Follower
 	rf.persist()
 	// commit似乎没问题
 	if args.LeaderCommit > rf.commitIndex && len(rf.Logs) == args.PrevLogIndex && rf.Logs[len(rf.Logs)-1].CommandTerm == args.PrevLogTerm {
