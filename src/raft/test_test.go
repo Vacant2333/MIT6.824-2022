@@ -869,14 +869,14 @@ func TestFigure82C(t *testing.T) {
 			}
 		}
 	}
-
+	fmt.Println("---connect")
 	for i := 0; i < servers; i++ {
 		if cfg.rafts[i] == nil {
 			cfg.start1(i, cfg.applier)
 			cfg.connect(i)
 		}
 	}
-
+	fmt.Println("---one")
 	cfg.one(rand.Int(), servers, true)
 
 	cfg.end()

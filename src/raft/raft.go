@@ -63,14 +63,14 @@ const (
 	Leader    = 3
 
 	TickerSleepTime   = 25 * time.Millisecond  // Ticker 睡眠时间 ms
-	ElectionSleepTime = 10 * time.Millisecond  // 选举睡眠时间
-	HeartBeatSendTime = 115 * time.Millisecond // 心跳包发送时间 ms
+	ElectionSleepTime = 20 * time.Millisecond  // 选举睡眠时间
+	HeartBeatSendTime = 120 * time.Millisecond // 心跳包发送时间 ms
 
 	PushLogsTime           = 3 * time.Millisecond  // Leader推送Log的间隔时间
 	checkCommittedLogsTime = 35 * time.Millisecond // Leader更新CommitIndex的间隔时间
 
-	ElectionTimeOutMin = 350 // 选举超时时间(也用于检查是否需要开始选举) 区间
-	ElectionTimeOutMax = 700
+	ElectionTimeOutMin = 450 // 选举超时时间(也用于检查是否需要开始选举) 区间
+	ElectionTimeOutMax = 600
 )
 
 // 获得一个随机选举超时时间
@@ -355,7 +355,7 @@ func (rf *Raft) killed() bool {
 func (rf *Raft) ticker() {
 	for rf.killed() == false {
 		rf.mu.Lock()
-		//fmt.Println("match:", rf.matchIndex)
+		fmt.Printf("s[%v] commit:%v\n", rf.me, rf.commitIndex)
 		// 检查是否要开始领导选举,检查超时时间和角色,并且没有投票给别人
 		if rf.isHeartBeatTimeOut() && rf.VotedFor == -1 && rf.role == Follower {
 			rf.mu.Unlock()
@@ -547,6 +547,7 @@ func (rf *Raft) pushLogsToFollower(server int) {
 		rf.mu.Lock()
 		if rf.role != Leader {
 			// 如果不是Leader了 停止推送
+			fmt.Printf("s[%v] is not a leader now!\n", rf.me)
 			rf.mu.Unlock()
 			return
 		}
@@ -634,7 +635,9 @@ func (rf *Raft) sendHeartBeatsToAll() {
 	// func: 发送单个心跳包给某服务器
 	sendHeartBeat := func(server int, args *AppendEnTriesArgs) bool {
 		reply := &AppendEntriesReply{}
+		start := time.Now()
 		ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
+		fmt.Println("heart time:", time.Now().Sub(start).Milliseconds(), ok)
 		rf.mu.Lock()
 		defer rf.mu.Unlock()
 		// 如果接收到的RPC请求或响应中,任期号T>CurrentTerm,那么就令currentTerm等于T,并且切换状态为Follower
