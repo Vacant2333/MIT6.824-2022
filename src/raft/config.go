@@ -563,6 +563,7 @@ func (cfg *config) wait(index int, n int, startTerm int) interface{} {
 // if retry==false, calls Start() only once, in order
 // to simplify the early Lab 2B tests.
 func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
+	fmt.Println("Test: one start")
 	t0 := time.Now()
 	starts := 0
 	for time.Since(t0).Seconds() < 10 && cfg.checkFinished() == false {
@@ -608,7 +609,8 @@ func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 		}
 	}
 	if cfg.checkFinished() == false {
-		fmt.Println("Test: time:", time.Now().Sub(t0).Milliseconds())
+		// todo:check one leader会延长测试时间
+		fmt.Println("Test: one end time:", time.Now().Sub(t0).Milliseconds(), "check leader:", cfg.checkOneLeader())
 		cfg.t.Fatalf("one(%v) failed to reach agreement", cmd)
 	}
 	return -1

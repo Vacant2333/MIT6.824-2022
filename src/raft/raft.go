@@ -359,8 +359,8 @@ func (rf *Raft) ticker() {
 		// 检查是否要开始领导选举,检查超时时间和角色,并且没有投票给别人
 		if rf.isHeartBeatTimeOut() && rf.VotedFor == -1 && rf.role == Follower {
 			rf.mu.Unlock()
-			rf.startElection()
 			fmt.Println(rf.me, "start election")
+			rf.startElection()
 		} else {
 			rf.mu.Unlock()
 		}
@@ -394,6 +394,7 @@ func (rf *Raft) startElection() {
 			// 1.赢得了大部分选票,成为Leader
 			//fmt.Printf("L[%v] is a Leader now\n", rf.me)
 			rf.role = Leader
+			rf.VotedFor = -1
 			// 初始化Leader需要的内容
 			rf.nextIndex = make([]int, len(rf.peers))
 			rf.matchIndex = make([]int, len(rf.peers))
@@ -562,6 +563,9 @@ func (rf *Raft) pushLogsToFollower(server int) {
 			if pushReply.Success {
 				// 检查推送完成后是否为最新,不为则继续Push,更新Follower的nextIndex,matchIndex
 				retry = len(rf.Logs) != pushLastIndex
+				if retry == false {
+					fmt.Printf("L[%v] didnt retry send to s[%v]\n", rf.me, server)
+				}
 				rf.nextIndex[server] = pushLastIndex + 1
 				rf.matchIndex[server] = pushLastIndex
 				fmt.Printf("L[%v] push log to F[%v] success,Leader LogsLen:[%v] pushLast:[%v]\n", rf.me, server, len(rf.Logs), pushLastIndex)
@@ -625,7 +629,7 @@ func (rf *Raft) sendAppendEntries(logs []ApplyMsg, nextIndex int, server int) (b
 	rf.mu.Unlock()
 	start := time.Now()
 	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
-	fmt.Println("push time:", server, time.Now().Sub(start).Milliseconds())
+	fmt.Println(rf.me, "->", server, "push time:", time.Now().Sub(start).Milliseconds())
 	rf.mu.Lock()
 	return ok, reply
 }
@@ -637,7 +641,7 @@ func (rf *Raft) sendHeartBeatsToAll() {
 		reply := &AppendEntriesReply{}
 		start := time.Now()
 		ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
-		fmt.Println("heart time:", time.Now().Sub(start).Milliseconds(), ok)
+		fmt.Println(rf.me, "->", server, "heart time:", time.Now().Sub(start).Milliseconds(), ok)
 		rf.mu.Lock()
 		defer rf.mu.Unlock()
 		// 如果接收到的RPC请求或响应中,任期号T>CurrentTerm,那么就令currentTerm等于T,并且切换状态为Follower
@@ -742,7 +746,6 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 		} else if args.PrevLogIndex <= len(rf.Logs) && rf.Logs[args.PrevLogIndex-1].CommandTerm != args.PrevLogTerm {
 			// 发生冲突,索引相同任期不同,删除从PrevLogIndex开始之后的所有Log
 			reply.XTerm = rf.Logs[args.PrevLogIndex-1].CommandTerm
-
 			for i := 0; i < len(rf.Logs); i++ {
 				if rf.Logs[i].CommandTerm == reply.XTerm {
 					reply.XIndex = i + 1
