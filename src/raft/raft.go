@@ -355,7 +355,7 @@ func (rf *Raft) killed() bool {
 func (rf *Raft) ticker() {
 	for rf.killed() == false {
 		rf.mu.Lock()
-		fmt.Printf("s[%v] commit:%v\n", rf.me, rf.commitIndex)
+		//fmt.Printf("s[%v] commit:%v\n", rf.me, rf.commitIndex)
 		// 检查是否要开始领导选举,检查超时时间和角色,并且没有投票给别人
 		if rf.isHeartBeatTimeOut() && rf.VotedFor == -1 && rf.role == Follower {
 			rf.mu.Unlock()
@@ -560,8 +560,8 @@ func (rf *Raft) pushLogsToFollower(server int) {
 			pushLastIndex := len(rf.Logs)
 			pushOk, pushReply := rf.sendAppendEntries(pushLogs, followerNextIndex, server)
 			if pushReply.Success {
-				// 成功,更新Follower的nextIndex,matchIndex
-				retry = false
+				// 检查推送完成后是否为最新,不为则继续Push,更新Follower的nextIndex,matchIndex
+				retry = len(rf.Logs) != pushLastIndex
 				rf.nextIndex[server] = pushLastIndex + 1
 				rf.matchIndex[server] = pushLastIndex
 				fmt.Printf("L[%v] push log to F[%v] success,Leader LogsLen:[%v] pushLast:[%v]\n", rf.me, server, len(rf.Logs), pushLastIndex)
@@ -742,6 +742,7 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 		} else if args.PrevLogIndex <= len(rf.Logs) && rf.Logs[args.PrevLogIndex-1].CommandTerm != args.PrevLogTerm {
 			// 发生冲突,索引相同任期不同,删除从PrevLogIndex开始之后的所有Log
 			reply.XTerm = rf.Logs[args.PrevLogIndex-1].CommandTerm
+
 			for i := 0; i < len(rf.Logs); i++ {
 				if rf.Logs[i].CommandTerm == reply.XTerm {
 					reply.XIndex = i + 1

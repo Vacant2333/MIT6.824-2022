@@ -608,17 +608,10 @@ func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 		}
 	}
 	if cfg.checkFinished() == false {
-		//cfg.printLogs()
+		fmt.Println("Test: time:", time.Now().Sub(t0).Milliseconds())
 		cfg.t.Fatalf("one(%v) failed to reach agreement", cmd)
 	}
 	return -1
-}
-
-// 辅助函数
-func (cfg *config) printLogs() {
-	for i := 0; i < len(cfg.rafts); i++ {
-		fmt.Printf("Test:s[%v] Logs:[%v]\n", i, cfg.rafts[i].Logs)
-	}
 }
 
 // start a Test.
