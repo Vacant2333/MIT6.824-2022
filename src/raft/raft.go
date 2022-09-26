@@ -371,7 +371,6 @@ func (rf *Raft) ticker() {
 // 开始一场选举
 func (rf *Raft) startElection() {
 	rf.mu.Lock()
-	//fmt.Printf("s[%v] start a election now\n", rf.me)
 	// 初始化投票数据
 	rf.VotedFor = rf.me
 	// 把投给自己设为True,其他人设为False
@@ -392,7 +391,7 @@ func (rf *Raft) startElection() {
 		voteCount := rf.getGrantedVotes()
 		if voteCount > len(rf.peers)/2 {
 			// 1.赢得了大部分选票,成为Leader
-			//fmt.Printf("L[%v] is a Leader now\n", rf.me)
+			fmt.Printf("L[%v] is a Leader now\n", rf.me)
 			rf.role = Leader
 			rf.VotedFor = -1
 			// 初始化Leader需要的内容
@@ -422,7 +421,6 @@ func (rf *Raft) startElection() {
 			// 2.其他人成为了Leader,转为Follower了
 			//fmt.Printf("F[%v] another server is Leader now\n", rf.me)
 			rf.VotedFor = -1
-			//rf.persist()
 			rf.mu.Unlock()
 			return
 		} else if electionTimeOut.Before(time.Now()) {
@@ -430,7 +428,6 @@ func (rf *Raft) startElection() {
 			//fmt.Printf("C[%v] election time out\n", rf.me)
 			rf.VotedFor = -1
 			rf.role = Follower
-			//rf.persist()
 			rf.mu.Unlock()
 			return
 		}
@@ -629,7 +626,7 @@ func (rf *Raft) sendAppendEntries(logs []ApplyMsg, nextIndex int, server int) (b
 	rf.mu.Unlock()
 	start := time.Now()
 	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
-	fmt.Println(rf.me, "->", server, "push time:", time.Now().Sub(start).Milliseconds())
+	fmt.Printf("L[%v] push appendEntries to F[%v],time:[%vms] ok:[%v]\n", rf.me, server, time.Now().Sub(start).Milliseconds(), ok)
 	rf.mu.Lock()
 	return ok, reply
 }
@@ -641,13 +638,12 @@ func (rf *Raft) sendHeartBeatsToAll() {
 		reply := &AppendEntriesReply{}
 		start := time.Now()
 		ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
-		fmt.Println(rf.me, "->", server, "heart time:", time.Now().Sub(start).Milliseconds(), ok)
+		fmt.Printf("L[%v] push heart to F[%v],time:[%vms] ok:[%v]\n", rf.me, server, time.Now().Sub(start).Milliseconds(), ok)
 		rf.mu.Lock()
 		defer rf.mu.Unlock()
 		// 如果接收到的RPC请求或响应中,任期号T>CurrentTerm,那么就令currentTerm等于T,并且切换状态为Follower
 		if reply.FollowerTerm > rf.CurrentTerm {
 			rf.transToFollower(reply.FollowerTerm)
-			//fmt.Printf("F[%v] trans to Follower because s[%v]'s Term bigger\n", rf.me, server)
 		}
 		return ok && reply.Success
 	}
@@ -739,9 +735,10 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 			// 如果是第一条Log不校验,persist在后面
 			rf.Logs = args.Logs
 			reply.Success = true
-		} else if args.PrevLogIndex <= len(rf.Logs) && rf.Logs[args.PrevLogIndex-1].CommandTerm == args.PrevLogTerm {
+		} else if args.PrevLogIndex <= len(rf.Logs) && args.PrevLogIndex == len(rf.Logs) && rf.Logs[args.PrevLogIndex-1].CommandTerm == args.PrevLogTerm {
 			// 校验正常 可以正常追加,persist在后面 todo:???
-			rf.Logs = append(rf.Logs[:args.PrevLogIndex], args.Logs...)
+			//rf.Logs = append(rf.Logs[:args.PrevLogIndex], args.Logs...)
+			rf.Logs = append(rf.Logs, args.Logs...)
 			reply.Success = true
 		} else if args.PrevLogIndex <= len(rf.Logs) && rf.Logs[args.PrevLogIndex-1].CommandTerm != args.PrevLogTerm {
 			// 发生冲突,索引相同任期不同,删除从PrevLogIndex开始之后的所有Log
@@ -757,6 +754,8 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 			reply.Success = false
 			rf.persist()
 			return
+		} else if args.PrevLogIndex <= len(rf.Logs) && args.PrevLogIndex != len(rf.Logs) && rf.Logs[args.PrevLogIndex-1].CommandTerm == args.PrevLogTerm {
+			fmt.Printf("args.PrevLogIndex != len(rf.Logs) %v %v\n", args.PrevLogIndex, len(rf.Logs))
 		} else {
 			// 校验失败.Follower在PreLogIndex的位置没有条目
 			reply.XTerm = -1
