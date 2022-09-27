@@ -1,0 +1,745 @@
+Test (2C): basic persistence ...
+Test: one start
+1 start election
+2 start election
+L[1] is a Leader now
+L[1] didnt retry send to s[0]
+L[1] push log to F[0] success,Leader LogsLen:[1] pushLast:[1] pushLen:[1]
+L[1] didnt retry send to s[2]
+L[1] push log to F[2] success,Leader LogsLen:[1] pushLast:[1] pushLen:[1]
+L[1] update commitIndex to [1]
+s[1] update commitIndex [0]->[1]
+s[0] update commitIndex [0]->[1]
+s[2] update commitIndex [0]->[1]
+s[0] readPersist logs:1
+s[1] readPersist logs:1
+s[2] readPersist logs:1
+Test: one start
+1 start election
+L[1] is a Leader now
+L[1] didnt retry send to s[2]
+L[1] push log to F[2] success,Leader LogsLen:[2] pushLast:[2] pushLen:[1]
+L[1] didnt retry send to s[0]
+L[1] push log to F[0] success,Leader LogsLen:[2] pushLast:[2] pushLen:[1]
+L[1] update commitIndex to [2]
+s[1] update commitIndex [0]->[2]
+s[2] update commitIndex [0]->[2]
+s[0] update commitIndex [0]->[2]
+s[1] readPersist logs:2
+Test: one start
+0 start election
+L[0] is a Leader now
+s[1] update commitIndex [0]->[2]
+L[0] didnt retry send to s[1]
+L[0] push log to F[1] success,Leader LogsLen:[3] pushLast:[3] pushLen:[1]
+L[0] didnt retry send to s[2]
+L[0] push log to F[2] success,Leader LogsLen:[3] pushLast:[3] pushLen:[1]
+L[0] update commitIndex to [3]
+s[0] update commitIndex [2]->[3]
+s[1] update commitIndex [2]->[3]
+s[2] update commitIndex [2]->[3]
+Test: disconnect  0
+Test: one start
+1 start election
+L[1] is a Leader now
+L[1] didnt retry send to s[2]
+L[1] push log to F[2] success,Leader LogsLen:[4] pushLast:[4] pushLen:[1]
+L[1] update commitIndex to [4]
+s[1] update commitIndex [3]->[4]
+s[2] update commitIndex [3]->[4]
+s[0] readPersist logs:3
+Test: connect  0
+L[1] didnt retry send to s[0]
+L[1] push log to F[0] success,Leader LogsLen:[4] pushLast:[4] pushLen:[1]
+s[0] update commitIndex [0]->[4]
+Test: one start
+L[1] didnt retry send to s[0]
+L[1] push log to F[0] success,Leader LogsLen:[5] pushLast:[5] pushLen:[1]
+L[1] update commitIndex to [5]
+s[1] update commitIndex [4]->[5]
+s[0] update commitIndex [4]->[5]
+s[2] readPersist logs:4
+Test: one start
+L[1] didnt retry send to s[0]
+L[1] push log to F[0] success,Leader LogsLen:[6] pushLast:[6] pushLen:[1]
+L[1] update commitIndex to [6]
+s[1] update commitIndex [5]->[6]
+s[0] update commitIndex [5]->[6]
+L[1] didnt retry send to s[0]
+L[1] push log to F[0] success,Leader LogsLen:[7] pushLast:[7] pushLen:[1]
+L[1] update commitIndex to [7]
+s[1] update commitIndex [6]->[7]
+s[0] update commitIndex [6]->[7]
+L[1] didnt retry send to s[2]
+L[1] push log to F[2] success,Leader LogsLen:[7] pushLast:[7] pushLen:[3]
+s[2] update commitIndex [0]->[7]
+  ... Passed --   9.6  3  168   64014    7
+Test (2C): more persistence ...
+Test: one start
+1 start election
+L[1] is a Leader now
+L[1] didnt retry send to s[2]
+L[1] push log to F[2] success,Leader LogsLen:[1] pushLast:[1] pushLen:[1]
+L[1] didnt retry send to s[4]
+L[1] push log to F[4] success,Leader LogsLen:[1] pushLast:[1] pushLen:[1]
+L[1] didnt retry send to s[0]
+L[1] push log to F[0] success,Leader LogsLen:[1] pushLast:[1] pushLen:[1]
+L[1] didnt retry send to s[3]
+L[1] push log to F[3] success,Leader LogsLen:[1] pushLast:[1] pushLen:[1]
+L[1] update commitIndex to [1]
+s[1] update commitIndex [0]->[1]
+s[0] update commitIndex [0]->[1]
+s[2] update commitIndex [0]->[1]
+s[3] update commitIndex [0]->[1]
+s[4] update commitIndex [0]->[1]
+Test: one start
+L[1] didnt retry send to s[0]
+L[1] push log to F[0] success,Leader LogsLen:[2] pushLast:[2] pushLen:[1]
+L[1] didnt retry send to s[4]
+L[1] push log to F[4] success,Leader LogsLen:[2] pushLast:[2] pushLen:[1]
+L[1] update commitIndex to [2]
+s[1] update commitIndex [1]->[2]
+s[0] update commitIndex [1]->[2]
+s[4] update commitIndex [1]->[2]
+s[2] readPersist logs:1
+s[3] readPersist logs:1
+0 start election
+3 start election
+4 start election
+s[4] readPersist logs:2
+Test: one start
+0 start election
+3 start election
+0 start election
+4 start election
+L[4] is a Leader now
+s[3] nextIndex:[3]->[2]
+s[2] nextIndex:[3]->[2]
+L[4] didnt retry send to s[2]
+L[4] push log to F[2] success,Leader LogsLen:[3] pushLast:[3] pushLen:[2]
+L[4] didnt retry send to s[3]
+L[4] push log to F[3] success,Leader LogsLen:[3] pushLast:[3] pushLen:[2]
+L[4] update commitIndex to [3]
+s[4] update commitIndex [0]->[3]
+s[2] update commitIndex [0]->[3]
+s[3] update commitIndex [0]->[3]
+Test: one start
+s[0] nextIndex:[3]->[0]
+s[1] is not a leader now!
+1 start election
+s[4] is not a leader now!
+s[4] is not a leader now!
+4 start election
+L[4] is a Leader now
+s[1] is not a leader now!
+s[1] is not a leader now!
+s[0] nextIndex:[4]->[3]
+s[1] nextIndex:[4]->[1]
+L[4] didnt retry send to s[2]
+L[4] push log to F[2] success,Leader LogsLen:[4] pushLast:[4] pushLen:[1]
+L[4] didnt retry send to s[3]
+L[4] push log to F[3] success,Leader LogsLen:[4] pushLast:[4] pushLen:[1]
+L[4] didnt retry send to s[0]
+L[4] push log to F[0] success,Leader LogsLen:[4] pushLast:[4] pushLen:[2]
+L[4] didnt retry send to s[1]
+L[4] push log to F[1] success,Leader LogsLen:[4] pushLast:[4] pushLen:[4]
+L[4] update commitIndex to [4]
+s[4] update commitIndex [3]->[4]
+s[0] update commitIndex [2]->[4]
+s[1] update commitIndex [2]->[4]
+s[2] update commitIndex [3]->[4]
+s[3] update commitIndex [3]->[4]
+Test: one start
+L[4] didnt retry send to s[2]
+L[4] push log to F[2] success,Leader LogsLen:[5] pushLast:[5] pushLen:[1]
+L[4] didnt retry send to s[3]
+L[4] push log to F[3] success,Leader LogsLen:[5] pushLast:[5] pushLen:[1]
+L[4] update commitIndex to [5]
+s[4] update commitIndex [4]->[5]
+s[2] update commitIndex [4]->[5]
+s[3] update commitIndex [4]->[5]
+s[0] readPersist logs:4
+s[1] readPersist logs:4
+0 start election
+2 start election
+3 start election
+s[2] readPersist logs:5
+Test: one start
+0 start election
+3 start election
+2 start election
+L[2] is a Leader now
+s[0] nextIndex:[6]->[5]
+s[1] nextIndex:[6]->[5]
+L[2] didnt retry send to s[1]
+L[2] push log to F[1] success,Leader LogsLen:[6] pushLast:[6] pushLen:[2]
+L[2] didnt retry send to s[0]
+L[2] push log to F[0] success,Leader LogsLen:[6] pushLast:[6] pushLen:[2]
+L[2] update commitIndex to [6]
+s[2] update commitIndex [0]->[6]
+s[0] update commitIndex [0]->[6]
+s[1] update commitIndex [0]->[6]
+Test: one start
+L[2] didnt retry send to s[0]
+L[2] push log to F[0] success,Leader LogsLen:[7] pushLast:[7] pushLen:[1]
+L[2] didnt retry send to s[1]
+L[2] push log to F[1] success,Leader LogsLen:[7] pushLast:[7] pushLen:[1]
+L[2] update commitIndex to [7]
+s[2] update commitIndex [6]->[7]
+s[4] is not a leader now!
+s[4] is not a leader now!
+4 start election
+s[2] is not a leader now!
+s[2] is not a leader now!
+2 start election
+L[2] is a Leader now
+s[0] update commitIndex [6]->[7]
+s[1] update commitIndex [6]->[7]
+s[4] is not a leader now!
+s[4] is not a leader now!
+s[4] is not a leader now!
+s[3] nextIndex:[8]->[6]
+s[4] nextIndex:[8]->[6]
+L[2] didnt retry send to s[0]
+L[2] push log to F[0] success,Leader LogsLen:[8] pushLast:[8] pushLen:[1]
+L[2] didnt retry send to s[1]
+L[2] push log to F[1] success,Leader LogsLen:[8] pushLast:[8] pushLen:[1]
+s[3] update commitIndex [5]->[7]
+L[2] didnt retry send to s[4]
+s[4] update commitIndex [5]->[7]
+L[2] push log to F[4] success,Leader LogsLen:[8] pushLast:[8] pushLen:[3]
+L[2] didnt retry send to s[3]
+L[2] push log to F[3] success,Leader LogsLen:[8] pushLast:[8] pushLen:[3]
+L[2] update commitIndex to [8]
+s[2] update commitIndex [7]->[8]
+s[0] update commitIndex [7]->[8]
+s[1] update commitIndex [7]->[8]
+s[3] update commitIndex [7]->[8]
+s[4] update commitIndex [7]->[8]
+Test: one start
+L[2] didnt retry send to s[1]
+L[2] push log to F[1] success,Leader LogsLen:[9] pushLast:[9] pushLen:[1]
+L[2] didnt retry send to s[0]
+L[2] push log to F[0] success,Leader LogsLen:[9] pushLast:[9] pushLen:[1]
+L[2] update commitIndex to [9]
+s[2] update commitIndex [8]->[9]
+s[4] is not a leader now!
+s[1] update commitIndex [8]->[9]
+s[0] update commitIndex [8]->[9]
+s[3] readPersist logs:8
+s[4] readPersist logs:8
+s[2] is not a leader now!
+1 start election
+4 start election
+0 start election
+4 start election
+s[0] readPersist logs:9
+Test: one start
+1 start election
+4 start election
+1 start election
+0 start election
+L[0] is a Leader now
+s[4] nextIndex:[10]->[9]
+s[3] nextIndex:[10]->[9]
+L[0] didnt retry send to s[4]
+L[0] push log to F[4] success,Leader LogsLen:[10] pushLast:[10] pushLen:[2]
+L[0] didnt retry send to s[3]
+L[0] push log to F[3] success,Leader LogsLen:[10] pushLast:[10] pushLen:[2]
+L[0] update commitIndex to [10]
+s[0] update commitIndex [0]->[10]
+s[4] update commitIndex [0]->[10]
+s[3] update commitIndex [0]->[10]
+Test: one start
+s[1] nextIndex:[10]->[0]
+s[2] is not a leader now!
+2 start election
+s[0] is not a leader now!
+s[0] is not a leader now!
+0 start election
+L[0] is a Leader now
+s[0] is not a leader now!
+L[0] didnt retry send to s[3]
+L[0] push log to F[3] success,Leader LogsLen:[11] pushLast:[11] pushLen:[1]
+s[1] nextIndex:[11]->[10]
+L[0] didnt retry send to s[4]
+L[0] push log to F[4] success,Leader LogsLen:[11] pushLast:[11] pushLen:[1]
+s[2] nextIndex:[11]->[8]
+L[0] didnt retry send to s[1]
+L[0] push log to F[1] success,Leader LogsLen:[11] pushLast:[11] pushLen:[2]
+L[0] didnt retry send to s[2]
+L[0] push log to F[2] success,Leader LogsLen:[11] pushLast:[11] pushLen:[4]
+s[2] update commitIndex [9]->[10]
+s[1] update commitIndex [9]->[10]
+L[0] update commitIndex to [11]
+s[0] update commitIndex [10]->[11]
+s[1] update commitIndex [10]->[11]
+s[2] update commitIndex [10]->[11]
+s[3] update commitIndex [10]->[11]
+s[4] update commitIndex [10]->[11]
+s[2] is not a leader now!
+Test: one start
+L[0] didnt retry send to s[4]
+L[0] push log to F[4] success,Leader LogsLen:[12] pushLast:[12] pushLen:[1]
+L[0] didnt retry send to s[3]
+L[0] push log to F[3] success,Leader LogsLen:[12] pushLast:[12] pushLen:[1]
+L[0] update commitIndex to [12]
+s[0] update commitIndex [11]->[12]
+s[4] update commitIndex [11]->[12]
+s[3] update commitIndex [11]->[12]
+s[1] readPersist logs:11
+s[2] readPersist logs:11
+2 start election
+1 start election
+3 start election
+4 start election
+s[3] readPersist logs:12
+Test: one start
+4 start election
+1 start election
+3 start election
+L[3] is a Leader now
+s[2] nextIndex:[13]->[12]
+s[1] nextIndex:[13]->[12]
+L[3] didnt retry send to s[1]
+L[3] push log to F[1] success,Leader LogsLen:[13] pushLast:[13] pushLen:[2]
+L[3] didnt retry send to s[2]
+L[3] push log to F[2] success,Leader LogsLen:[13] pushLast:[13] pushLen:[2]
+L[3] update commitIndex to [13]
+s[3] update commitIndex [0]->[13]
+4 start election
+s[1] update commitIndex [0]->[13]
+s[2] update commitIndex [0]->[13]
+Test: one start
+L[3] didnt retry send to s[2]
+L[3] push log to F[2] success,Leader LogsLen:[14] pushLast:[14] pushLen:[1]
+L[3] didnt retry send to s[1]
+L[3] push log to F[1] success,Leader LogsLen:[14] pushLast:[14] pushLen:[1]
+L[3] update commitIndex to [14]
+s[3] update commitIndex [13]->[14]
+s[0] is not a leader now!
+s[0] is not a leader now!
+0 start election
+s[3] is not a leader now!
+s[3] is not a leader now!
+3 start election
+L[3] is a Leader now
+s[1] update commitIndex [13]->[14]
+s[2] update commitIndex [13]->[14]
+s[0] is not a leader now!
+s[4] nextIndex:[15]->[13]
+s[0] nextIndex:[15]->[13]
+L[3] didnt retry send to s[2]
+L[3] push log to F[2] success,Leader LogsLen:[15] pushLast:[15] pushLen:[1]
+L[3] didnt retry send to s[1]
+L[3] push log to F[1] success,Leader LogsLen:[15] pushLast:[15] pushLen:[1]
+L[3] didnt retry send to s[0]
+L[3] push log to F[0] success,Leader LogsLen:[15] pushLast:[15] pushLen:[3]
+L[3] didnt retry send to s[4]
+L[3] push log to F[4] success,Leader LogsLen:[15] pushLast:[15] pushLen:[3]
+L[3] update commitIndex to [15]
+s[3] update commitIndex [14]->[15]
+s[0] update commitIndex [12]->[15]
+s[2] update commitIndex [14]->[15]
+s[4] update commitIndex [12]->[15]
+s[1] update commitIndex [14]->[15]
+s[0] is not a leader now!
+s[0] is not a leader now!
+Test: one start
+L[3] didnt retry send to s[1]
+L[3] push log to F[1] success,Leader LogsLen:[16] pushLast:[16] pushLen:[1]
+L[3] didnt retry send to s[2]
+L[3] push log to F[2] success,Leader LogsLen:[16] pushLast:[16] pushLen:[1]
+L[3] update commitIndex to [16]
+s[3] update commitIndex [15]->[16]
+s[1] update commitIndex [15]->[16]
+s[2] update commitIndex [15]->[16]
+s[4] readPersist logs:15
+s[0] readPersist logs:15
+4 start election
+2 start election
+1 start election
+s[1] readPersist logs:16
+Test: one start
+4 start election
+2 start election
+1 start election
+L[1] is a Leader now
+s[4] nextIndex:[17]->[16]
+s[0] nextIndex:[17]->[16]
+L[1] didnt retry send to s[0]
+L[1] push log to F[0] success,Leader LogsLen:[17] pushLast:[17] pushLen:[2]
+L[1] didnt retry send to s[4]
+L[1] push log to F[4] success,Leader LogsLen:[17] pushLast:[17] pushLen:[2]
+L[1] update commitIndex to [17]
+s[1] update commitIndex [0]->[17]
+s[0] update commitIndex [0]->[17]
+s[4] update commitIndex [0]->[17]
+Test: one start
+s[3] is not a leader now!
+s[3] is not a leader now!
+L[1] didnt retry send to s[0]
+L[1] push log to F[0] success,Leader LogsLen:[18] pushLast:[18] pushLen:[1]
+L[1] didnt retry send to s[4]
+L[1] push log to F[4] success,Leader LogsLen:[18] pushLast:[18] pushLen:[1]
+L[1] update commitIndex to [18]
+s[1] update commitIndex [17]->[18]
+3 start election
+s[1] is not a leader now!
+s[1] is not a leader now!
+1 start election
+L[1] is a Leader now
+s[0] update commitIndex [17]->[18]
+s[4] update commitIndex [17]->[18]
+s[3] is not a leader now!
+s[3] is not a leader now!
+s[1] is not a leader now!
+s[2] nextIndex:[19]->[17]
+s[3] nextIndex:[19]->[17]
+L[1] didnt retry send to s[0]
+L[1] push log to F[0] success,Leader LogsLen:[19] pushLast:[19] pushLen:[1]
+L[1] didnt retry send to s[4]
+L[1] push log to F[4] success,Leader LogsLen:[19] pushLast:[19] pushLen:[1]
+L[1] update commitIndex to [19]
+s[1] update commitIndex [18]->[19]
+L[1] didnt retry send to s[2]
+L[1] push log to F[2] success,Leader LogsLen:[19] pushLast:[19] pushLen:[3]
+L[1] didnt retry send to s[3]
+L[1] push log to F[3] success,Leader LogsLen:[19] pushLast:[19] pushLen:[3]
+s[3] update commitIndex [16]->[19]
+s[2] update commitIndex [16]->[19]
+s[0] update commitIndex [18]->[19]
+s[4] update commitIndex [18]->[19]
+  ... Passed --  22.3  5 1692  580678   19
+Test (2C): partitioned leader and one follower crash, leader restarts ...
+Test: one start
+0 start election
+1 start election
+L[0] is a Leader now
+L[0] didnt retry send to s[1]
+L[0] push log to F[1] success,Leader LogsLen:[1] pushLast:[1] pushLen:[1]
+L[0] didnt retry send to s[2]
+L[0] push log to F[2] success,Leader LogsLen:[1] pushLast:[1] pushLen:[1]
+L[0] update commitIndex to [1]
+s[0] update commitIndex [0]->[1]
+s[1] update commitIndex [0]->[1]
+s[2] update commitIndex [0]->[1]
+Test: one start
+L[0] didnt retry send to s[1]
+L[0] push log to F[1] success,Leader LogsLen:[2] pushLast:[2] pushLen:[1]
+L[0] update commitIndex to [2]
+s[0] update commitIndex [1]->[2]
+s[1] update commitIndex [1]->[2]
+s[0] readPersist logs:2
+Test: one start
+2 start election
+0 start election
+L[0] is a Leader now
+s[2] nextIndex:[3]->[2]
+L[0] didnt retry send to s[2]
+L[0] push log to F[2] success,Leader LogsLen:[3] pushLast:[3] pushLen:[2]
+L[0] update commitIndex to [3]
+s[0] update commitIndex [0]->[3]
+s[2] update commitIndex [1]->[3]
+s[1] readPersist logs:2
+Test: one start
+L[0] didnt retry send to s[2]
+L[0] push log to F[2] success,Leader LogsLen:[4] pushLast:[4] pushLen:[1]
+L[0] update commitIndex to [4]
+s[0] update commitIndex [3]->[4]
+s[2] update commitIndex [3]->[4]
+L[0] didnt retry send to s[2]
+L[0] push log to F[2] success,Leader LogsLen:[5] pushLast:[5] pushLen:[1]
+L[0] update commitIndex to [5]
+s[0] update commitIndex [4]->[5]
+s[2] update commitIndex [4]->[5]
+L[0] didnt retry send to s[2]
+L[0] push log to F[2] success,Leader LogsLen:[6] pushLast:[6] pushLen:[1]
+L[0] update commitIndex to [6]
+s[0] update commitIndex [5]->[6]
+s[2] update commitIndex [5]->[6]
+L[0] didnt retry send to s[1]
+L[0] push log to F[1] success,Leader LogsLen:[6] pushLast:[6] pushLen:[4]
+s[1] update commitIndex [0]->[6]
+  ... Passed --   6.4  3  111   42194    6
+Test (2C): Figure 8 ...
+Test: one start
+2 start election
+0 start election
+L[2] is a Leader now
+L[2] didnt retry send to s[0]
+L[2] push log to F[0] success,Leader LogsLen:[1] pushLast:[1] pushLen:[1]
+L[2] didnt retry send to s[3]
+L[2] push log to F[3] success,Leader LogsLen:[1] pushLast:[1] pushLen:[1]
+L[2] didnt retry send to s[1]
+L[2] push log to F[1] success,Leader LogsLen:[1] pushLast:[1] pushLen:[1]
+L[2] didnt retry send to s[4]
+L[2] push log to F[4] success,Leader LogsLen:[1] pushLast:[1] pushLen:[1]
+L[2] update commitIndex to [1]
+s[2] update commitIndex [0]->[1]
+0 start election
+L[0] is a Leader now
+L[0] didnt retry send to s[4]
+L[0] push log to F[4] success,Leader LogsLen:[2] pushLast:[2] pushLen:[1]
+L[0] didnt retry send to s[1]
+L[0] push log to F[1] success,Leader LogsLen:[2] pushLast:[2] pushLen:[1]
+L[0] didnt retry send to s[3]
+L[0] push log to F[3] success,Leader LogsLen:[2] pushLast:[2] pushLen:[1]
+L[0] update commitIndex to [2]
+s[0] update commitIndex [0]->[2]
+s[1] update commitIndex [0]->[2]
+s[3] update commitIndex [0]->[2]
+s[4] update commitIndex [0]->[2]
+4 start election
+L[4] is a Leader now
+L[4] didnt retry send to s[3]
+L[4] push log to F[3] success,Leader LogsLen:[3] pushLast:[3] pushLen:[1]
+L[4] didnt retry send to s[1]
+L[4] push log to F[1] success,Leader LogsLen:[3] pushLast:[3] pushLen:[1]
+s[4] readPersist logs:3
+1 start election
+L[1] is a Leader now
+s[4] update commitIndex [0]->[2]
+L[1] didnt retry send to s[4]
+L[1] push log to F[4] success,Leader LogsLen:[4] pushLast:[4] pushLen:[1]
+L[1] didnt retry send to s[3]
+L[1] push log to F[3] success,Leader LogsLen:[4] pushLast:[4] pushLen:[1]
+s[1] readPersist logs:4
+4 start election
+L[4] is a Leader now
+s[1] update commitIndex [0]->[2]
+L[4] didnt retry send to s[1]
+L[4] push log to F[1] success,Leader LogsLen:[5] pushLast:[5] pushLen:[1]
+L[4] didnt retry send to s[3]
+L[4] push log to F[3] success,Leader LogsLen:[5] pushLast:[5] pushLen:[1]
+s[0] readPersist logs:2
+1 start election
+3 start election
+1 start election
+L[1] is a Leader now
+s[0] nextIndex:[6]->[3]
+L[1] didnt retry send to s[3]
+L[1] push log to F[3] success,Leader LogsLen:[6] pushLast:[6] pushLen:[1]
+L[1] didnt retry send to s[0]
+L[1] push log to F[0] success,Leader LogsLen:[6] pushLast:[6] pushLen:[4]
+s[4] readPersist logs:5
+0 start election
+L[0] is a Leader now
+s[4] nextIndex:[7]->[6]
+L[0] didnt retry send to s[3]
+L[0] push log to F[3] success,Leader LogsLen:[7] pushLast:[7] pushLen:[1]
+s[0] readPersist logs:7
+3 start election
+L[3] is a Leader now
+s[0] update commitIndex [0]->[2]
+s[4] update commitIndex [0]->[2]
+L[3] didnt retry send to s[4]
+L[3] push log to F[4] success,Leader LogsLen:[8] pushLast:[8] pushLen:[1]
+s[2] readPersist logs:2
+4 start election
+L[4] is a Leader now
+L[4] didnt retry send to s[0]
+L[4] push log to F[0] success,Leader LogsLen:[9] pushLast:[9] pushLen:[1]
+s[2] nextIndex:[9]->[3]
+s[4] readPersist logs:9
+2 start election
+4 start election
+L[4] is a Leader now
+s[1] readPersist logs:6
+0 start election
+L[0] is a Leader now
+s[2] nextIndex:[10]->[3]
+s[1] nextIndex:[10]->[7]
+s[0] readPersist logs:10
+1 start election
+0 start election
+L[0] is a Leader now
+s[3] readPersist logs:8
+2 start election
+3 start election
+1 start election
+1 start election
+3 start election
+3 start election
+1 start election
+3 start election
+L[3] is a Leader now
+s[2] nextIndex:[9]->[3]
+s[1] nextIndex:[9]->[7]
+s[2] nextIndex:[3]->[1]
+s[3] readPersist logs:9
+1 start election
+3 start election
+L[3] is a Leader now
+s[2] nextIndex:[10]->[2]
+s[1] nextIndex:[10]->[7]
+s[0] readPersist logs:11
+1 start election
+0 start election
+L[0] is a Leader now
+s[2] nextIndex:[12]->[2]
+s[1] nextIndex:[12]->[7]
+s[0] readPersist logs:12
+0 start election
+L[0] is a Leader now
+s[2] nextIndex:[13]->[2]
+s[1] nextIndex:[13]->[7]
+L[0] didnt retry send to s[1]
+L[0] push log to F[1] success,Leader LogsLen:[13] pushLast:[13] pushLen:[7]
+L[0] didnt retry send to s[2]
+L[0] push log to F[2] success,Leader LogsLen:[13] pushLast:[13] pushLen:[12]
+s[4] readPersist logs:10
+2 start election
+L[2] is a Leader now
+s[2] readPersist logs:14
+4 start election
+1 start election
+2 start election
+L[2] is a Leader now
+s[4] nextIndex:[15]->[11]
+s[1] nextIndex:[15]->[14]
+s[4] nextIndex:[11]->[10]
+L[2] didnt retry send to s[1]
+L[2] push log to F[1] success,Leader LogsLen:[15] pushLast:[15] pushLen:[2]
+s[0] readPersist logs:13
+1 start election
+L[1] is a Leader now
+s[0] nextIndex:[16]->[14]
+s[4] nextIndex:[16]->[10]
+s[2] readPersist logs:15
+2 start election
+L[2] is a Leader now
+s[0] nextIndex:[16]->[14]
+s[4] nextIndex:[16]->[10]
+L[2] didnt retry send to s[4]
+L[2] push log to F[4] success,Leader LogsLen:[16] pushLast:[16] pushLen:[7]
+L[2] didnt retry send to s[0]
+L[2] push log to F[0] success,Leader LogsLen:[16] pushLast:[16] pushLen:[3]
+s[1] readPersist logs:16
+0 start election
+L[0] is a Leader now
+L[0] didnt retry send to s[1]
+L[0] push log to F[1] success,Leader LogsLen:[17] pushLast:[17] pushLen:[1]
+L[0] didnt retry send to s[4]
+L[0] push log to F[4] success,Leader LogsLen:[17] pushLast:[17] pushLen:[1]
+s[2] readPersist logs:16
+2 start election
+4 start election
+L[4] is a Leader now
+s[2] nextIndex:[18]->[17]
+L[4] didnt retry send to s[1]
+L[4] push log to F[1] success,Leader LogsLen:[18] pushLast:[18] pushLen:[1]
+s[3] readPersist logs:10
+1 start election
+L[1] is a Leader now
+s[0] readPersist logs:17
+0 start election
+2 start election
+0 start election
+L[0] is a Leader now
+s[3] nextIndex:[18]->[11]
+s[2] nextIndex:[18]->[17]
+s[3] nextIndex:[11]->[10]
+L[0] didnt retry send to s[2]
+L[0] push log to F[2] success,Leader LogsLen:[18] pushLast:[18] pushLen:[2]
+s[1] readPersist logs:19
+3 start election
+1 start election
+2 start election
+L[2] is a Leader now
+s[4] readPersist logs:18
+1 start election
+L[1] is a Leader now
+s[3] nextIndex:[20]->[10]
+s[4] nextIndex:[20]->[19]
+s[3] nextIndex:[10]->[9]
+L[1] didnt retry send to s[4]
+L[1] push log to F[4] success,Leader LogsLen:[20] pushLast:[20] pushLen:[2]
+s[1] readPersist logs:20
+4 start election
+L[4] is a Leader now
+s[3] nextIndex:[21]->[9]
+L[4] didnt retry send to s[1]
+L[4] push log to F[1] success,Leader LogsLen:[21] pushLast:[21] pushLen:[1]
+s[4] readPersist logs:21
+4 start election
+L[4] is a Leader now
+s[4] readPersist logs:22
+3 start election
+4 start election
+L[4] is a Leader now
+s[0] readPersist logs:18
+3 start election
+0 start election
+L[3] is a Leader now
+s[0] nextIndex:[22]->[19]
+s[3] readPersist logs:22
+0 start election
+3 start election
+1 start election
+1 start election
+L[1] is a Leader now
+s[0] nextIndex:[23]->[19]
+L[1] didnt retry send to s[3]
+L[1] push log to F[3] success,Leader LogsLen:[23] pushLast:[23] pushLen:[1]
+s[0] nextIndex:[19]->[18]
+s[1] readPersist logs:23
+3 start election
+L[3] is a Leader now
+L[3] didnt retry send to s[1]
+L[3] push log to F[1] success,Leader LogsLen:[24] pushLast:[24] pushLen:[1]
+L[3] didnt retry send to s[0]
+L[3] push log to F[0] success,Leader LogsLen:[24] pushLast:[24] pushLen:[1]
+s[3] readPersist logs:24
+0 start election
+L[0] is a Leader now
+L[0] didnt retry send to s[1]
+L[0] push log to F[1] success,Leader LogsLen:[25] pushLast:[25] pushLen:[1]
+L[0] didnt retry send to s[3]
+L[0] push log to F[3] success,Leader LogsLen:[25] pushLast:[25] pushLen:[1]
+L[0] update commitIndex to [25]
+s[0] update commitIndex [0]->[25]
+s[2] readPersist logs:19
+3 start election
+L[3] is a Leader now
+s[2] nextIndex:[26]->[20]
+L[3] didnt retry send to s[1]
+L[3] push log to F[1] success,Leader LogsLen:[26] pushLast:[26] pushLen:[1]
+s[2] nextIndex:[20]->[19]
+s[2] nextIndex:[19]->[18]
+s[3] readPersist logs:26
+1 start election
+L[1] is a Leader now
+s[2] nextIndex:[27]->[18]
+L[1] didnt retry send to s[3]
+L[1] push log to F[3] success,Leader LogsLen:[27] pushLast:[27] pushLen:[1]
+s[4] readPersist logs:23
+2 start election
+4 start election
+L[2] is a Leader now
+L[2] didnt retry send to s[3]
+L[2] push log to F[3] success,Leader LogsLen:[28] pushLast:[28] pushLen:[1]
+s[4] nextIndex:[28]->[24]
+s[1] readPersist logs:27
+3 start election
+1 start election
+4 start election
+3 start election
+L[3] is a Leader now
+s[4] nextIndex:[29]->[24]
+s[1] nextIndex:[29]->[28]
+s[4] nextIndex:[24]->[23]
+L[3] didnt retry send to s[1]
+L[3] push log to F[1] success,Leader LogsLen:[29] pushLast:[29] pushLen:[2]
+s[4] nextIndex:[23]->[22]
+L[3] didnt retry send to s[4]
+L[3] push log to F[4] success,Leader LogsLen:[29] pushLast:[29] pushLen:[8]
+L[3] update commitIndex to [29]
+s[3] update commitIndex [0]->[29]
+s[1] update commitIndex [0]->[29]
+s[4] update commitIndex [0]->[29]
+2022/09/27 18:09:06 1: log map[1:7690226852211470489 2:1050611952301464344 3:1241373877834306344 4:2952559401438872732 5:7975162790773042718 6:1193472879459397565 7:7512479146061974175 8:21072815122965811 9:2194663932015107389 10:525258271627060387 11:8765162901444909757 12:4265666247318723235 13:5908468242581273007 14:331202006380648625 15:3668627438022946024]; server map[1:7690226852211470489 2:1050611952301464344 3:1241373877834306344 4:2952559401438872732 5:7975162790773042718 6:1193472879459397565 7:7512479146061974175 8:21072815122965811 9:2194663932015107389 10:525258271627060387 11:8765162901444909757 12:4265666247318723235 13:5908468242581273007 14:331202006380648625 15:3668627438022946024 16:5981013153950723249 17:6923419380722909801 18:8067069452782923797 19:8733493990458141553 20:5844131209284196128 21:4593696216545435670 22:4896492576495782812 23:4182574886556826488 24:6213794656142086604 25:4941155606049730344]
+2022/09/27 18:09:06 1: log map[1:7690226852211470489 2:1050611952301464344 3:1241373877834306344 4:2952559401438872732 5:7975162790773042718 6:1193472879459397565 7:7512479146061974175 8:21072815122965811 9:2194663932015107389 10:525258271627060387 11:8765162901444909757 12:4265666247318723235 13:5908468242581273007 14:331202006380648625 15:3668627438022946024]; server map[1:7690226852211470489 2:1050611952301464344 3:1241373877834306344 4:2952559401438872732 5:7975162790773042718 6:1193472879459397565 7:7512479146061974175 8:21072815122965811 9:2194663932015107389 10:525258271627060387 11:8765162901444909757 12:4265666247318723235 13:5908468242581273007 14:331202006380648625 15:3668627438022946024 16:5981013153950723249 17:6923419380722909801 18:8067069452782923797 19:8733493990458141553 20:5844131209284196128 21:4593696216545435670 22:4896492576495782812 23:4182574886556826488 24:6213794656142086604 25:4941155606049730344 26:6385931574191709207 27:8447555957759876019 28:5464803629130544821 29:8079980276077106914]
+2022/09/27 18:09:06 apply error: commit index=16 server=1 7491503149304407166 != server=3 5981013153950723249
+exit status 1
+FAIL	mit6.824/raft	68.164s
