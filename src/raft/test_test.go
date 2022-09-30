@@ -858,6 +858,7 @@ func TestFigure82C(t *testing.T) {
 
 		if leader != -1 {
 			cfg.crash1(leader)
+			fmt.Printf("Test: crash s[%v] nup:[%v]\n", leader, nup)
 			nup -= 1
 		}
 
@@ -866,6 +867,7 @@ func TestFigure82C(t *testing.T) {
 			if cfg.rafts[s] == nil {
 				cfg.start1(s, cfg.applier)
 				cfg.connect(s)
+				fmt.Printf("Test: connect s[%v] nup:[%v]\n", s, nup+1)
 				nup += 1
 			}
 		}

@@ -570,7 +570,7 @@ func (rf *Raft) pushLogsToFollower(server int, startTerm int) {
 				rf.mu.Unlock()
 				return
 			} else if pushOk {
-				// 推送失败但是请求成功,减少nextIndex且重试 todo:检查超时
+				// 推送失败但是请求成功,减少nextIndex且重试
 				retry = true
 				// 发送前和发送后的nextIndex不匹配
 				if followerNextIndex != rf.nextIndex[server] {
@@ -714,17 +714,18 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 	rf.VotedFor = -1
 	rf.role = Follower
 	// AppendEntries Pack的检查和处理
-	//if len(args.Logs) > 0 {
 	if args.PrevLogIndex == 0 && len(args.Logs) != 0 {
 		// 如果是第一条Log不校验,persist在后面,Follower接受到的Logs,已提交状态初始为False
 		rf.Logs = args.Logs
 		reply.Success = true
 		rf.persist()
+		rf.updateCommitIndex(int(math.Min(float64(args.LeaderCommit), float64(len(rf.Logs)))))
 	} else if args.PrevLogIndex != 0 && args.PrevLogIndex <= len(rf.Logs) && rf.Logs[args.PrevLogIndex-1].CommandTerm == args.PrevLogTerm {
 		// 校验正常 可以正常追加,persist在后面
 		rf.Logs = append(rf.Logs[:args.PrevLogIndex], args.Logs...)
 		reply.Success = true
 		rf.persist()
+		rf.updateCommitIndex(int(math.Min(float64(args.LeaderCommit), float64(len(rf.Logs)))))
 	} else if args.PrevLogIndex != 0 && args.PrevLogIndex <= len(rf.Logs) && rf.Logs[args.PrevLogIndex-1].CommandTerm != args.PrevLogTerm {
 		// 发生冲突,索引相同任期不同,删除从PrevLogIndex开始之后的所有Log
 		reply.XTerm = rf.Logs[args.PrevLogIndex-1].CommandTerm
@@ -747,11 +748,10 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 		reply.Success = false
 		return
 	}
-	//}
 	// 更新Follower的commitIndex
-	if args.LeaderCommit > rf.commitIndex && len(rf.Logs) == args.PrevLogIndex && rf.Logs[len(rf.Logs)-1].CommandTerm == args.PrevLogTerm {
-		rf.updateCommitIndex(int(math.Min(float64(args.LeaderCommit), float64(len(rf.Logs)))))
-	}
+	//if args.LeaderCommit > rf.commitIndex && len(rf.Logs) == args.PrevLogIndex && rf.Logs[len(rf.Logs)-1].CommandTerm == args.PrevLogTerm {
+	//	rf.updateCommitIndex(int(math.Min(float64(args.LeaderCommit), float64(len(rf.Logs)))))
+	//}
 }
 
 //
