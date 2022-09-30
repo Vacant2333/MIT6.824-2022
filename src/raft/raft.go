@@ -20,6 +20,7 @@ package raft
 import (
 	"bytes"
 	"fmt"
+	"log"
 	"math"
 	"math/rand"
 	"mit6.824/labgob"
@@ -357,6 +358,17 @@ func (rf *Raft) ticker() {
 		rf.mu.Lock()
 		//fmt.Printf("s[%v] commit:%v\n", rf.me, rf.commitIndex)
 		// 检查是否要开始领导选举,检查超时时间和角色,并且没有投票给别人
+		if len(rf.Logs) >= 1 {
+			first := 0
+			for index := 1; index <= len(rf.Logs); index++ {
+				if first+1 != rf.Logs[index-1].CommandIndex {
+					log.Fatalf("s[%v] log index error first %v logs:%v\n", rf.me, first, rf.Logs)
+				} else {
+					first = rf.Logs[index-1].CommandIndex
+				}
+			}
+		}
+
 		if rf.isHeartBeatTimeOut() && rf.VotedFor == -1 && rf.role == Follower {
 			rf.mu.Unlock()
 			fmt.Println(rf.me, "start election")
@@ -574,28 +586,23 @@ func (rf *Raft) pushLogsToFollower(server int, startTerm int) {
 				// 推送失败但是请求成功,减少nextIndex且重试 todo:检查超时
 				retry = true
 				// 发送前和发送后的nextIndex不匹配
-				//if followerNextIndex != rf.nextIndex[server] {
-				//	fmt.Printf("s[%v] continue\n", server)
-				//	rf.mu.Unlock()
-				//	continue
-				//}
+				if followerNextIndex != rf.nextIndex[server] {
+					fmt.Printf("s[%v] continue\n", server)
+					rf.mu.Unlock()
+					continue
+				}
 				old := rf.nextIndex[server]
 				if pushReply.XTerm != -1 {
 					if index, ok := rf.termIndex[pushReply.XTerm]; ok {
 						// Leader有对应Term的Log
-						//fmt.Println(rf.termIndex, pushReply.XTerm)
-						rf.nextIndex[server] = index
-						//fmt.Println(2, "S:", server, "nextIndex:", rf.nextIndex[server], "XTerm:", pushReply.XTerm)
+						rf.nextIndex[server] = index - 1
 					} else {
 						// Leader没有对应Term的Log
 						rf.nextIndex[server] = pushReply.XIndex
-						//fmt.Println(pushReply.XTerm, rf.termIndex)
-						//fmt.Println(1, "S:", server, "nextIndex:", rf.nextIndex[server], "XTerm:", pushReply.XTerm)
 					}
 				} else {
 					// Follower的日志太短了
 					rf.nextIndex[server] = pushReply.XLen + 1
-					//fmt.Println(3, "S:", server, "nextIndex:", rf.nextIndex[server], "XTerm:", pushReply.XTerm)
 				}
 				fmt.Printf("s[%v] nextIndex:[%v]->[%v]\n", server, old, rf.nextIndex[server])
 			} else {
@@ -624,9 +631,7 @@ func (rf *Raft) sendAppendEntries(logs []ApplyMsg, nextIndex int, server int) (b
 		args.PrevLogIndex, args.PrevLogTerm = nextIndex-1, rf.Logs[nextIndex-2].CommandTerm
 	}
 	rf.mu.Unlock()
-	//start := time.Now()
 	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
-	//fmt.Printf("L[%v] push appendEntries to F[%v],time:[%vms] ok:[%v]\n", rf.me, server, time.Now().Sub(start).Milliseconds(), ok)
 	rf.mu.Lock()
 	return ok, reply
 }
@@ -636,9 +641,7 @@ func (rf *Raft) sendHeartBeatsToAll() {
 	// func: 发送单个心跳包给某服务器
 	sendHeartBeat := func(server int, args *AppendEnTriesArgs) bool {
 		reply := &AppendEntriesReply{}
-		//start := time.Now()
 		ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
-		//fmt.Printf("L[%v] push heart to F[%v],time:[%vms] ok:[%v]\n", rf.me, server, time.Now().Sub(start).Milliseconds(), ok)
 		rf.mu.Lock()
 		defer rf.mu.Unlock()
 		// 如果接收到的RPC请求或响应中,任期号T>CurrentTerm,那么就令currentTerm等于T,并且切换状态为Follower
@@ -652,7 +655,6 @@ func (rf *Raft) sendHeartBeatsToAll() {
 		rf.mu.Lock()
 		if rf.role != Leader {
 			// 如果现在不是Leader,停止发送心跳包
-			//fmt.Printf("F[%v] is not a leader now!\n", rf.me)
 			rf.mu.Unlock()
 			return
 		}
@@ -669,7 +671,6 @@ func (rf *Raft) sendHeartBeatsToAll() {
 		if len(rf.Logs) > 0 {
 			heartBeatArgs.PrevLogIndex = len(rf.Logs)
 			heartBeatArgs.PrevLogTerm = rf.Logs[len(rf.Logs)-1].CommandTerm
-			//fmt.Printf("L[%v] push heart args:%v %v\n", rf.me, heartBeatArgs, rf.Logs[len(rf.Logs)-1])
 		}
 		rf.mu.Unlock()
 		// 给除了自己以外的服务器发送心跳包
@@ -729,30 +730,11 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 	if len(args.Logs) > 0 {
 		if args.PrevLogIndex == 0 {
 			// 如果是第一条Log不校验,persist在后面,Follower接受到的Logs,已提交状态初始为False
-			for index := 1; index <= len(args.Logs); index++ {
-				args.Logs[index-1].CommandIndex = index
-			}
 			rf.Logs = args.Logs
 			reply.Success = true
 		} else if args.PrevLogIndex <= len(rf.Logs) && rf.Logs[args.PrevLogIndex-1].CommandTerm == args.PrevLogTerm {
 			// 校验正常 可以正常追加,persist在后面
 			rf.Logs = append(rf.Logs[:args.PrevLogIndex], args.Logs...)
-			//for index := args.PrevLogIndex + 1; index <= (args.PrevLogIndex + len(args.Logs)); index++ {
-			//	// 要追加的Log
-			//	log := args.Logs[index-args.PrevLogIndex-1]
-			//	log.CommandIndex = index
-			//	if index <= len(rf.Logs) {
-			//		// 追加的这条Log在Follower内存在
-			//		if rf.Logs[index-1].CommandTerm != log.CommandTerm {
-			//			// 任期号不同,覆盖
-			//			rf.Logs[index-1] = log
-			//		}
-			//	} else {
-			//		// 这条Log在Follower内不存在,Follower的日志更短
-			//		log.CommandValid = false
-			//		rf.Logs = append(rf.Logs, log)
-			//	}
-			//}
 			reply.Success = true
 		} else if args.PrevLogIndex <= len(rf.Logs) && rf.Logs[args.PrevLogIndex-1].CommandTerm != args.PrevLogTerm {
 			// 发生冲突,索引相同任期不同,删除从PrevLogIndex开始之后的所有Log
