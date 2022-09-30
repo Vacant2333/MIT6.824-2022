@@ -20,7 +20,6 @@ package raft
 import (
 	"bytes"
 	"fmt"
-	"log"
 	"math"
 	"math/rand"
 	"mit6.824/labgob"
@@ -356,19 +355,7 @@ func (rf *Raft) killed() bool {
 func (rf *Raft) ticker() {
 	for rf.killed() == false {
 		rf.mu.Lock()
-		//fmt.Printf("s[%v] commit:%v\n", rf.me, rf.commitIndex)
 		// 检查是否要开始领导选举,检查超时时间和角色,并且没有投票给别人
-		if len(rf.Logs) >= 1 {
-			first := 0
-			for index := 1; index <= len(rf.Logs); index++ {
-				if first+1 != rf.Logs[index-1].CommandIndex {
-					log.Fatalf("s[%v] log index error first %v logs:%v\n", rf.me, first, rf.Logs)
-				} else {
-					first = rf.Logs[index-1].CommandIndex
-				}
-			}
-		}
-
 		if rf.isHeartBeatTimeOut() && rf.VotedFor == -1 && rf.role == Follower {
 			rf.mu.Unlock()
 			fmt.Println(rf.me, "start election")
@@ -447,7 +434,7 @@ func (rf *Raft) startElection() {
 	}
 }
 
-// 获得当前已获得的选票数量,需要Lock的时候使用
+// 获得当前已获得的选票数量,Lock的时候使用
 func (rf *Raft) getGrantedVotes() int {
 	voteCount := 0
 	for server := 0; server < len(rf.peers); server++ {
@@ -727,39 +714,40 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 	rf.VotedFor = -1
 	rf.role = Follower
 	// AppendEntries Pack的检查和处理
-	if len(args.Logs) > 0 {
-		if args.PrevLogIndex == 0 {
-			// 如果是第一条Log不校验,persist在后面,Follower接受到的Logs,已提交状态初始为False
-			rf.Logs = args.Logs
-			reply.Success = true
-		} else if args.PrevLogIndex <= len(rf.Logs) && rf.Logs[args.PrevLogIndex-1].CommandTerm == args.PrevLogTerm {
-			// 校验正常 可以正常追加,persist在后面
-			rf.Logs = append(rf.Logs[:args.PrevLogIndex], args.Logs...)
-			reply.Success = true
-		} else if args.PrevLogIndex <= len(rf.Logs) && rf.Logs[args.PrevLogIndex-1].CommandTerm != args.PrevLogTerm {
-			// 发生冲突,索引相同任期不同,删除从PrevLogIndex开始之后的所有Log
-			reply.XTerm = rf.Logs[args.PrevLogIndex-1].CommandTerm
-			for i := 0; i < len(rf.Logs); i++ {
-				if rf.Logs[i].CommandTerm == reply.XTerm {
-					reply.XIndex = i + 1
-					break
-				}
+	//if len(args.Logs) > 0 {
+	if args.PrevLogIndex == 0 && len(args.Logs) != 0 {
+		// 如果是第一条Log不校验,persist在后面,Follower接受到的Logs,已提交状态初始为False
+		rf.Logs = args.Logs
+		reply.Success = true
+		rf.persist()
+	} else if args.PrevLogIndex != 0 && args.PrevLogIndex <= len(rf.Logs) && rf.Logs[args.PrevLogIndex-1].CommandTerm == args.PrevLogTerm {
+		// 校验正常 可以正常追加,persist在后面
+		rf.Logs = append(rf.Logs[:args.PrevLogIndex], args.Logs...)
+		reply.Success = true
+		rf.persist()
+	} else if args.PrevLogIndex != 0 && args.PrevLogIndex <= len(rf.Logs) && rf.Logs[args.PrevLogIndex-1].CommandTerm != args.PrevLogTerm {
+		// 发生冲突,索引相同任期不同,删除从PrevLogIndex开始之后的所有Log
+		reply.XTerm = rf.Logs[args.PrevLogIndex-1].CommandTerm
+		for i := 0; i < len(rf.Logs); i++ {
+			if rf.Logs[i].CommandTerm == reply.XTerm {
+				reply.XIndex = i + 1
+				break
 			}
-			reply.XLen = -1
-			rf.Logs = rf.Logs[:args.PrevLogIndex-1]
-			reply.Success = false
-			rf.persist()
-			return
-		} else {
-			// 校验失败.Follower在PreLogIndex的位置没有条目
-			reply.XTerm = -1
-			reply.XIndex = -1
-			reply.XLen = len(rf.Logs)
-			reply.Success = false
-			return
 		}
+		reply.XLen = -1
+		rf.Logs = rf.Logs[:args.PrevLogIndex-1]
+		reply.Success = false
+		rf.persist()
+		return
+	} else {
+		// 校验失败.Follower在PreLogIndex的位置没有条目
+		reply.XTerm = -1
+		reply.XIndex = -1
+		reply.XLen = len(rf.Logs)
+		reply.Success = false
+		return
 	}
-	rf.persist()
+	//}
 	// 更新Follower的commitIndex
 	if args.LeaderCommit > rf.commitIndex && len(rf.Logs) == args.PrevLogIndex && rf.Logs[len(rf.Logs)-1].CommandTerm == args.PrevLogTerm {
 		rf.updateCommitIndex(int(math.Min(float64(args.LeaderCommit), float64(len(rf.Logs)))))

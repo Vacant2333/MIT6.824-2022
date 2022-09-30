@@ -837,6 +837,7 @@ func TestFigure82C(t *testing.T) {
 
 	nup := servers
 	for iters := 0; iters < 1000; iters++ {
+		fmt.Println("Test Figure8: iters:", iters)
 		leader := -1
 		for i := 0; i < servers; i++ {
 			if cfg.rafts[i] != nil {
