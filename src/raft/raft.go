@@ -574,7 +574,7 @@ func (rf *Raft) pushLogsToFollower(server int, startTerm int) {
 				retry = true
 				// 发送前和发送后的nextIndex不匹配
 				if followerNextIndex != rf.nextIndex[server] {
-					fmt.Printf("s[%v] continue\n", server)
+					fmt.Printf("s[%v] push log nextIndex changed\n", server)
 					rf.mu.Unlock()
 					continue
 				}
@@ -719,13 +719,17 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 		rf.Logs = args.Logs
 		reply.Success = true
 		rf.persist()
-		rf.updateCommitIndex(int(math.Min(float64(args.LeaderCommit), float64(len(rf.Logs)))))
+		if args.Logs != nil {
+			rf.updateCommitIndex(int(math.Min(float64(args.LeaderCommit), float64(args.Logs[len(args.Logs)-1].CommandIndex))))
+		}
 	} else if args.PrevLogIndex != 0 && args.PrevLogIndex <= len(rf.Logs) && rf.Logs[args.PrevLogIndex-1].CommandTerm == args.PrevLogTerm {
-		// 校验正常 可以正常追加,persist在后面
+		// 校验正常,可以正常追加,persist在后面
 		rf.Logs = append(rf.Logs[:args.PrevLogIndex], args.Logs...)
 		reply.Success = true
 		rf.persist()
-		rf.updateCommitIndex(int(math.Min(float64(args.LeaderCommit), float64(len(rf.Logs)))))
+		if args.Logs != nil {
+			rf.updateCommitIndex(int(math.Min(float64(args.LeaderCommit), float64(args.Logs[len(args.Logs)-1].CommandIndex))))
+		}
 	} else if args.PrevLogIndex != 0 && args.PrevLogIndex <= len(rf.Logs) && rf.Logs[args.PrevLogIndex-1].CommandTerm != args.PrevLogTerm {
 		// 发生冲突,索引相同任期不同,删除从PrevLogIndex开始之后的所有Log
 		reply.XTerm = rf.Logs[args.PrevLogIndex-1].CommandTerm
