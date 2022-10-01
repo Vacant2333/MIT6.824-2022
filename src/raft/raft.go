@@ -160,6 +160,12 @@ func (rf *Raft) readPersist(data []byte) {
 		rf.VotedFor = votedFor
 		rf.CurrentTerm = currentTerm
 		rf.Logs = logs
+		// 读入commitIndex
+		for index := 0; index < len(logs); index++ {
+			if logs[index].CommandValid {
+				rf.commitIndex = index + 1
+			}
+		}
 	}
 	fmt.Printf("s[%v] readPersist logs:%v\n", rf.me, len(logs))
 }
@@ -193,6 +199,7 @@ type RequestVoteArgs struct {
 	CandidateIndex        int // 候选人的Index
 	CandidateLastLogIndex int // 候选人的最后日志条目的索引
 	CandidateLastLogTerm  int // 候选人最后日志条目的任期
+	CandidateCommitIndex  int
 }
 
 // RequestVoteReply
@@ -221,18 +228,18 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	if args.CandidateTerm >= rf.CurrentTerm && (rf.VotedFor == -1 || rf.VotedFor == args.CandidateIndex) {
 		// Candidate的Log至少和自己一样新,才能给他投票
 		vote := false
-		if rf.commitIndex == 0 {
+		if len(rf.Logs) == 0 {
 			// 自己没有Log,可以直接投
 			vote = true
-		} else if args.CandidateLastLogTerm > rf.Logs[rf.commitIndex-1].CommandTerm {
+		} else if args.CandidateLastLogTerm > rf.Logs[len(rf.Logs)-1].CommandTerm {
 			// 如果两份日志最后的条目的任期号不同,那么任期号大的日志更加新,在这里Candidate的最后一个Term大于Follower,可以投
 			vote = true
-		} else if args.CandidateLastLogTerm == rf.Logs[rf.commitIndex-1].CommandTerm && args.CandidateLastLogIndex >= rf.commitIndex {
+		} else if args.CandidateLastLogTerm == rf.Logs[len(rf.Logs)-1].CommandTerm && args.CandidateLastLogIndex >= len(rf.Logs) {
 			// 如果两份日志最后的条目任期号相同,那么日志比较长的那个就更加新
 			vote = true
 		}
 		// 执行投票
-		if vote {
+		if vote && args.CandidateCommitIndex >= rf.commitIndex {
 			reply.VoteGranted = true
 			rf.VotedFor = args.CandidateIndex
 			rf.heartBeatTimeOut = time.Now().Add(getRandElectionTimeOut())
@@ -470,11 +477,12 @@ func (rf *Raft) collectVotes() {
 		CandidateIndex:        rf.me,
 		CandidateLastLogIndex: 0,
 		CandidateLastLogTerm:  0,
+		CandidateCommitIndex:  rf.commitIndex,
 	}
 	// 填入Leader的最后一条Log的Term和Index,给Follower校验后更新commitIndex todo:fix
 	if rf.commitIndex > 0 {
-		askVoteArgs.CandidateLastLogIndex = rf.commitIndex
-		askVoteArgs.CandidateLastLogTerm = rf.Logs[rf.commitIndex-1].CommandTerm
+		askVoteArgs.CandidateLastLogIndex = len(rf.Logs)
+		askVoteArgs.CandidateLastLogTerm = rf.Logs[len(rf.Logs)-1].CommandTerm
 	}
 	for server := 0; server < len(rf.peers); server++ {
 		if server != rf.me {
@@ -610,7 +618,8 @@ func (rf *Raft) sendAppendEntries(logs []ApplyMsg, nextIndex int, server int) (b
 		PrevLogIndex: 0,
 		PrevLogTerm:  0,
 		Logs:         logs,
-		LeaderCommit: rf.commitIndex,
+		LeaderCommit: int(math.Min(float64(rf.matchIndex[server]), float64(rf.commitIndex))),
+		//LeaderCommit: rf.commitIndex,
 	}
 	reply := &AppendEntriesReply{}
 	// 如果新条目不是第一条日志,填入上一条的Index和Term
@@ -626,7 +635,19 @@ func (rf *Raft) sendAppendEntries(logs []ApplyMsg, nextIndex int, server int) (b
 // 持续发送心跳包给所有人
 func (rf *Raft) sendHeartBeatsToAll() {
 	// func: 发送单个心跳包给某服务器
-	sendHeartBeat := func(server int, args *AppendEnTriesArgs) bool {
+	sendHeartBeat := func(server int) bool {
+		args := &AppendEnTriesArgs{
+			LeaderTerm:   rf.CurrentTerm,
+			LeaderIndex:  rf.me,
+			PrevLogIndex: 0,
+			PrevLogTerm:  0,
+			Logs:         nil,
+			LeaderCommit: int(math.Min(float64(rf.matchIndex[server]), float64(rf.commitIndex))),
+		}
+		if len(rf.Logs) > 0 {
+			args.PrevLogIndex = len(rf.Logs)
+			args.PrevLogTerm = rf.Logs[len(rf.Logs)-1].CommandTerm
+		}
 		reply := &AppendEntriesReply{}
 		ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
 		rf.mu.Lock()
@@ -646,24 +667,24 @@ func (rf *Raft) sendHeartBeatsToAll() {
 			return
 		}
 		// 每次心跳包的args保持一致
-		heartBeatArgs := &AppendEnTriesArgs{
-			LeaderTerm:   rf.CurrentTerm,
-			LeaderIndex:  rf.me,
-			PrevLogIndex: 0,
-			PrevLogTerm:  0,
-			Logs:         nil,
-			LeaderCommit: rf.commitIndex,
-		}
+		//heartBeatArgs := &AppendEnTriesArgs{
+		//	LeaderTerm:   rf.CurrentTerm,
+		//	LeaderIndex:  rf.me,
+		//	PrevLogIndex: 0,
+		//	PrevLogTerm:  0,
+		//	Logs:         nil,
+		//	LeaderCommit: rf.commitIndex,
+		//}
 		// 给Prev赋能:)
-		if len(rf.Logs) > 0 {
-			heartBeatArgs.PrevLogIndex = len(rf.Logs)
-			heartBeatArgs.PrevLogTerm = rf.Logs[len(rf.Logs)-1].CommandTerm
-		}
+		//if len(rf.Logs) > 0 {
+		//	heartBeatArgs.PrevLogIndex = len(rf.Logs)
+		//	heartBeatArgs.PrevLogTerm = rf.Logs[len(rf.Logs)-1].CommandTerm
+		//}
 		rf.mu.Unlock()
 		// 给除了自己以外的服务器发送心跳包
 		for server := 0; server < len(rf.peers); server++ {
 			if server != rf.me {
-				go sendHeartBeat(server, heartBeatArgs)
+				go sendHeartBeat(server)
 			}
 		}
 		time.Sleep(HeartBeatSendTime)
