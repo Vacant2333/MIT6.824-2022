@@ -160,12 +160,6 @@ func (rf *Raft) readPersist(data []byte) {
 		rf.VotedFor = votedFor
 		rf.CurrentTerm = currentTerm
 		rf.Logs = logs
-		// 读入commitIndex
-		for index := 0; index < len(logs); index++ {
-			if logs[index].CommandValid {
-				rf.commitIndex = index + 1
-			}
-		}
 	}
 	fmt.Printf("s[%v] readPersist logs:%v\n", rf.me, len(logs))
 }
@@ -199,7 +193,7 @@ type RequestVoteArgs struct {
 	CandidateIndex        int // 候选人的Index
 	CandidateLastLogIndex int // 候选人的最后日志条目的索引
 	CandidateLastLogTerm  int // 候选人最后日志条目的任期
-	CandidateCommitIndex  int
+	CandidateCommitIndex  int // 候选人的最后一个提交的日志下标
 }
 
 // RequestVoteReply
@@ -238,7 +232,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 			// 如果两份日志最后的条目任期号相同,那么日志比较长的那个就更加新
 			vote = true
 		}
-		// 执行投票
+		// 执行投票,Candidate的提交的日志至少和Follower一样多
 		if vote && args.CandidateCommitIndex >= rf.commitIndex {
 			reply.VoteGranted = true
 			rf.VotedFor = args.CandidateIndex
@@ -479,8 +473,8 @@ func (rf *Raft) collectVotes() {
 		CandidateLastLogTerm:  0,
 		CandidateCommitIndex:  rf.commitIndex,
 	}
-	// 填入Leader的最后一条Log的Term和Index,给Follower校验后更新commitIndex todo:fix
-	if rf.commitIndex > 0 {
+	// 填入Leader的最后一条Log的Term和Index,给Follower校验后更新commitIndex
+	if len(rf.Logs) > 0 {
 		askVoteArgs.CandidateLastLogIndex = len(rf.Logs)
 		askVoteArgs.CandidateLastLogTerm = rf.Logs[len(rf.Logs)-1].CommandTerm
 	}
@@ -567,7 +561,7 @@ func (rf *Raft) pushLogsToFollower(server int, startTerm int) {
 				// 检查推送完成后是否为最新,不为则继续Push,更新Follower的nextIndex,matchIndex
 				retry = len(rf.Logs) != pushLastIndex
 				if retry == false {
-					fmt.Printf("L[%v] didnt retry send to s[%v]\n", rf.me, server)
+					fmt.Printf("L[%v] stop retry send to s[%v]\n", rf.me, server)
 				}
 				rf.nextIndex[server] = pushLastIndex + 1
 				rf.matchIndex[server] = pushLastIndex
@@ -580,12 +574,6 @@ func (rf *Raft) pushLogsToFollower(server int, startTerm int) {
 			} else if pushOk {
 				// 推送失败但是请求成功,减少nextIndex且重试
 				retry = true
-				// 发送前和发送后的nextIndex不匹配
-				//if followerNextIndex != rf.nextIndex[server] {
-				//	fmt.Printf("s[%v] push log nextIndex changed\n", server)
-				//	rf.mu.Unlock()
-				//	continue
-				//}
 				old := rf.nextIndex[server]
 				if pushReply.XTerm != -1 {
 					if index, ok := rf.termIndex[pushReply.XTerm]; ok {
@@ -618,8 +606,7 @@ func (rf *Raft) sendAppendEntries(logs []ApplyMsg, nextIndex int, server int) (b
 		PrevLogIndex: 0,
 		PrevLogTerm:  0,
 		Logs:         logs,
-		LeaderCommit: int(math.Min(float64(rf.matchIndex[server]), float64(rf.commitIndex))),
-		//LeaderCommit: rf.commitIndex,
+		LeaderCommit: rf.commitIndex,
 	}
 	reply := &AppendEntriesReply{}
 	// 如果新条目不是第一条日志,填入上一条的Index和Term
@@ -635,19 +622,7 @@ func (rf *Raft) sendAppendEntries(logs []ApplyMsg, nextIndex int, server int) (b
 // 持续发送心跳包给所有人
 func (rf *Raft) sendHeartBeatsToAll() {
 	// func: 发送单个心跳包给某服务器
-	sendHeartBeat := func(server int) bool {
-		args := &AppendEnTriesArgs{
-			LeaderTerm:   rf.CurrentTerm,
-			LeaderIndex:  rf.me,
-			PrevLogIndex: 0,
-			PrevLogTerm:  0,
-			Logs:         nil,
-			LeaderCommit: int(math.Min(float64(rf.matchIndex[server]), float64(rf.commitIndex))),
-		}
-		if len(rf.Logs) > 0 {
-			args.PrevLogIndex = len(rf.Logs)
-			args.PrevLogTerm = rf.Logs[len(rf.Logs)-1].CommandTerm
-		}
+	sendHeartBeat := func(server int, args *AppendEnTriesArgs) bool {
 		reply := &AppendEntriesReply{}
 		ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
 		rf.mu.Lock()
@@ -667,24 +642,24 @@ func (rf *Raft) sendHeartBeatsToAll() {
 			return
 		}
 		// 每次心跳包的args保持一致
-		//heartBeatArgs := &AppendEnTriesArgs{
-		//	LeaderTerm:   rf.CurrentTerm,
-		//	LeaderIndex:  rf.me,
-		//	PrevLogIndex: 0,
-		//	PrevLogTerm:  0,
-		//	Logs:         nil,
-		//	LeaderCommit: rf.commitIndex,
-		//}
+		args := &AppendEnTriesArgs{
+			LeaderTerm:   rf.CurrentTerm,
+			LeaderIndex:  rf.me,
+			PrevLogIndex: 0,
+			PrevLogTerm:  0,
+			Logs:         nil,
+			LeaderCommit: rf.commitIndex,
+		}
 		// 给Prev赋能:)
-		//if len(rf.Logs) > 0 {
-		//	heartBeatArgs.PrevLogIndex = len(rf.Logs)
-		//	heartBeatArgs.PrevLogTerm = rf.Logs[len(rf.Logs)-1].CommandTerm
-		//}
+		if len(rf.Logs) > 0 {
+			args.PrevLogIndex = len(rf.Logs)
+			args.PrevLogTerm = rf.Logs[len(rf.Logs)-1].CommandTerm
+		}
 		rf.mu.Unlock()
 		// 给除了自己以外的服务器发送心跳包
 		for server := 0; server < len(rf.peers); server++ {
 			if server != rf.me {
-				go sendHeartBeat(server)
+				go sendHeartBeat(server, args)
 			}
 		}
 		time.Sleep(HeartBeatSendTime)
@@ -739,21 +714,17 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 		// 如果是第一条Log不校验,persist在后面,Follower接受到的Logs,已提交状态初始为False
 		rf.Logs = args.Logs
 		reply.Success = true
-
-		if args.LeaderCommit > rf.commitIndex {
-			rf.updateCommitIndex(int(math.Min(float64(args.LeaderCommit), float64(args.PrevLogIndex+len(args.Logs)))))
-		} else {
-			rf.persist()
+		rf.persist()
+		if args.Logs != nil {
+			rf.updateCommitIndex(int(math.Min(float64(args.LeaderCommit), float64(args.Logs[len(args.Logs)-1].CommandIndex))))
 		}
 	} else if args.PrevLogIndex != 0 && args.PrevLogIndex <= len(rf.Logs) && rf.Logs[args.PrevLogIndex-1].CommandTerm == args.PrevLogTerm {
-		// 校验正常 可以正常追加,persist在后面
+		// 校验正常,可以正常追加,persist在后面
 		rf.Logs = append(rf.Logs[:args.PrevLogIndex], args.Logs...)
 		reply.Success = true
-
-		if args.LeaderCommit > rf.commitIndex {
-			rf.updateCommitIndex(int(math.Min(float64(args.LeaderCommit), float64(args.PrevLogIndex+len(args.Logs)))))
-		} else {
-			rf.persist()
+		rf.persist()
+		if args.Logs != nil {
+			rf.updateCommitIndex(int(math.Min(float64(args.LeaderCommit), float64(args.Logs[len(args.Logs)-1].CommandIndex))))
 		}
 	} else if args.PrevLogIndex != 0 && args.PrevLogIndex <= len(rf.Logs) && rf.Logs[args.PrevLogIndex-1].CommandTerm != args.PrevLogTerm {
 		// 发生冲突,索引相同任期不同,删除从PrevLogIndex开始之后的所有Log
@@ -777,10 +748,6 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 		reply.Success = false
 		return
 	}
-	// 更新Follower的commitIndex
-	//if args.LeaderCommit > rf.commitIndex && len(rf.Logs) == args.PrevLogIndex && rf.Logs[len(rf.Logs)-1].CommandTerm == args.PrevLogTerm {
-	//	rf.updateCommitIndex(int(math.Min(float64(args.LeaderCommit), float64(len(rf.Logs)))))
-	//}
 }
 
 //
