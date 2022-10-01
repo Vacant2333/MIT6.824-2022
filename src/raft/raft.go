@@ -221,13 +221,13 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	if args.CandidateTerm >= rf.CurrentTerm && (rf.VotedFor == -1 || rf.VotedFor == args.CandidateIndex) {
 		// Candidate的Log至少和自己一样新,才能给他投票
 		vote := false
-		if len(rf.Logs) == 0 {
+		if rf.commitIndex == 0 {
 			// 自己没有Log,可以直接投
 			vote = true
-		} else if args.CandidateLastLogTerm > rf.Logs[len(rf.Logs)-1].CommandTerm {
+		} else if args.CandidateLastLogTerm > rf.Logs[rf.commitIndex-1].CommandTerm {
 			// 如果两份日志最后的条目的任期号不同,那么任期号大的日志更加新,在这里Candidate的最后一个Term大于Follower,可以投
 			vote = true
-		} else if args.CandidateLastLogTerm == rf.Logs[len(rf.Logs)-1].CommandTerm && args.CandidateLastLogIndex >= len(rf.Logs) {
+		} else if args.CandidateLastLogTerm == rf.Logs[rf.commitIndex-1].CommandTerm && args.CandidateLastLogIndex >= rf.commitIndex {
 			// 如果两份日志最后的条目任期号相同,那么日志比较长的那个就更加新
 			vote = true
 		}
@@ -471,10 +471,10 @@ func (rf *Raft) collectVotes() {
 		CandidateLastLogIndex: 0,
 		CandidateLastLogTerm:  0,
 	}
-	// 填入Leader的最后一条Log的Term和Index,给Follower校验后更新commitIndex
-	if len(rf.Logs) > 0 {
-		askVoteArgs.CandidateLastLogIndex = len(rf.Logs)
-		askVoteArgs.CandidateLastLogTerm = rf.Logs[len(rf.Logs)-1].CommandTerm
+	// 填入Leader的最后一条Log的Term和Index,给Follower校验后更新commitIndex todo:fix
+	if rf.commitIndex > 0 {
+		askVoteArgs.CandidateLastLogIndex = rf.commitIndex
+		askVoteArgs.CandidateLastLogTerm = rf.Logs[rf.commitIndex-1].CommandTerm
 	}
 	for server := 0; server < len(rf.peers); server++ {
 		if server != rf.me {
@@ -573,11 +573,11 @@ func (rf *Raft) pushLogsToFollower(server int, startTerm int) {
 				// 推送失败但是请求成功,减少nextIndex且重试
 				retry = true
 				// 发送前和发送后的nextIndex不匹配
-				if followerNextIndex != rf.nextIndex[server] {
-					fmt.Printf("s[%v] push log nextIndex changed\n", server)
-					rf.mu.Unlock()
-					continue
-				}
+				//if followerNextIndex != rf.nextIndex[server] {
+				//	fmt.Printf("s[%v] push log nextIndex changed\n", server)
+				//	rf.mu.Unlock()
+				//	continue
+				//}
 				old := rf.nextIndex[server]
 				if pushReply.XTerm != -1 {
 					if index, ok := rf.termIndex[pushReply.XTerm]; ok {
@@ -718,17 +718,21 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 		// 如果是第一条Log不校验,persist在后面,Follower接受到的Logs,已提交状态初始为False
 		rf.Logs = args.Logs
 		reply.Success = true
-		rf.persist()
-		if args.Logs != nil {
-			rf.updateCommitIndex(int(math.Min(float64(args.LeaderCommit), float64(args.Logs[len(args.Logs)-1].CommandIndex))))
+
+		if args.LeaderCommit > rf.commitIndex {
+			rf.updateCommitIndex(int(math.Min(float64(args.LeaderCommit), float64(args.PrevLogIndex+len(args.Logs)))))
+		} else {
+			rf.persist()
 		}
 	} else if args.PrevLogIndex != 0 && args.PrevLogIndex <= len(rf.Logs) && rf.Logs[args.PrevLogIndex-1].CommandTerm == args.PrevLogTerm {
-		// 校验正常,可以正常追加,persist在后面
+		// 校验正常 可以正常追加,persist在后面
 		rf.Logs = append(rf.Logs[:args.PrevLogIndex], args.Logs...)
 		reply.Success = true
-		rf.persist()
-		if args.Logs != nil {
-			rf.updateCommitIndex(int(math.Min(float64(args.LeaderCommit), float64(args.Logs[len(args.Logs)-1].CommandIndex))))
+
+		if args.LeaderCommit > rf.commitIndex {
+			rf.updateCommitIndex(int(math.Min(float64(args.LeaderCommit), float64(args.PrevLogIndex+len(args.Logs)))))
+		} else {
+			rf.persist()
 		}
 	} else if args.PrevLogIndex != 0 && args.PrevLogIndex <= len(rf.Logs) && rf.Logs[args.PrevLogIndex-1].CommandTerm != args.PrevLogTerm {
 		// 发生冲突,索引相同任期不同,删除从PrevLogIndex开始之后的所有Log
