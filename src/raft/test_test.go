@@ -832,16 +832,16 @@ func TestFigure82C(t *testing.T) {
 	defer cfg.cleanup()
 
 	cfg.begin("Test (2C): Figure 8")
-
-	cfg.one(rand.Int(), 1, true)
+	// todo:删掉取余 3个
+	cfg.one(rand.Int()%100000, 1, true)
 
 	nup := servers
 	for iters := 0; iters < 1000; iters++ {
-		fmt.Println("Test Figure8: iters:", iters)
+		//fmt.Println("Test Figure8: iters:", iters)
 		leader := -1
 		for i := 0; i < servers; i++ {
 			if cfg.rafts[i] != nil {
-				_, _, ok := cfg.rafts[i].Start(rand.Int())
+				_, _, ok := cfg.rafts[i].Start(rand.Int() % 1000)
 				if ok {
 					leader = i
 				}
@@ -851,9 +851,11 @@ func TestFigure82C(t *testing.T) {
 		if (rand.Int() % 1000) < 100 {
 			ms := rand.Int63() % (int64(RaftElectionTimeout/time.Millisecond) / 2)
 			time.Sleep(time.Duration(ms) * time.Millisecond)
+			fmt.Printf("Test: sleep %vms\n", ms)
 		} else {
 			ms := (rand.Int63() % 13)
 			time.Sleep(time.Duration(ms) * time.Millisecond)
+			fmt.Printf("Test: sleep %vms\n", ms)
 		}
 
 		if leader != -1 {
@@ -880,7 +882,7 @@ func TestFigure82C(t *testing.T) {
 		}
 	}
 	fmt.Println("---one")
-	cfg.one(rand.Int(), servers, true)
+	cfg.one(rand.Int()%10000, servers, true)
 
 	cfg.end()
 }
