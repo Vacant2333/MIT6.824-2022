@@ -20,7 +20,6 @@ package raft
 import (
 	"bytes"
 	"fmt"
-	"math"
 	"math/rand"
 	"mit6.824/labgob"
 	"sort"
@@ -72,6 +71,20 @@ const (
 	ElectionTimeOutMin = 425 // 选举超时时间(也用于检查是否需要开始选举) 区间
 	ElectionTimeOutMax = 600
 )
+
+func min(a int, b int) int {
+	if a <= b {
+		return a
+	}
+	return b
+}
+
+func max(a int, b int) int {
+	if a >= b {
+		return a
+	}
+	return b
+}
 
 // 获得一个随机选举超时时间
 func getRandElectionTimeOut() time.Duration {
@@ -215,29 +228,27 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		//fmt.Printf("s[%v] update Term [%v]->[%v] by s[%v] when RequestVote\n", rf.me, rf.CurrentTerm, args.CandidateTerm, args.CandidateIndex)
 		rf.transToFollower(args.CandidateTerm)
 	}
+	reply.FollowerTerm = rf.CurrentTerm
 	// 是否投票给他
 	if args.CandidateTerm >= rf.CurrentTerm && (rf.VotedFor == -1 || rf.VotedFor == args.CandidateIndex) {
 		// Candidate的Log至少和自己一样新,才能给他投票
-		vote := false
 		if len(rf.Logs) == 0 {
-			// 自己没有Log,可以直接投
-			vote = true
+			// 自己没有Log
+			reply.VoteGranted = true
 		} else if args.CandidateLastLogTerm > rf.Logs[len(rf.Logs)-1].CommandTerm {
-			// 如果两份日志最后的条目的任期号不同,那么任期号大的日志更加新,在这里Candidate的最后一个Term大于Follower,可以投
-			vote = true
+			// 如果两份日志最后的条目的任期号不同,那么任期号大的日志更加新,在这里Candidate的最后一个Term大于Follower
+			reply.VoteGranted = true
 		} else if args.CandidateLastLogTerm == rf.Logs[len(rf.Logs)-1].CommandTerm && args.CandidateLastLogIndex >= len(rf.Logs) {
 			// 如果两份日志最后的条目任期号相同,那么日志比较长的那个就更加新
-			vote = true
+			reply.VoteGranted = true
 		}
 		// 执行投票
-		if vote {
-			reply.VoteGranted = true
+		if reply.VoteGranted {
 			rf.VotedFor = args.CandidateIndex
 			rf.heartBeatTimeOut = time.Now().Add(getRandElectionTimeOut())
 			rf.persist()
 		}
 	}
-	reply.FollowerTerm = rf.CurrentTerm
 }
 
 //
@@ -331,7 +342,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 func (rf *Raft) Kill() {
 	atomic.StoreInt32(&rf.dead, 1)
 	// Your code here, if desired.
-	rf.mu.Lock()
+	//rf.mu.Lock()
 	//fmt.Println("-----dead-----start")
 	//fmt.Printf("s[%v] dead! role:[%v], Term:[%v]"+
 	//	"\ncommitIndex:[%v] logsLen[%v]\nlogs:[%v]\n", rf.me, rf.role,
@@ -341,7 +352,7 @@ func (rf *Raft) Kill() {
 	//	fmt.Println("matchIndex:", rf.matchIndex)
 	//}
 	//fmt.Println("-----dead-----end--")
-	rf.mu.Unlock()
+	//rf.mu.Unlock()
 }
 
 func (rf *Raft) killed() bool {
@@ -356,7 +367,6 @@ func (rf *Raft) ticker() {
 		rf.mu.Lock()
 		// 检查是否要开始领导选举,检查超时时间和角色,并且没有投票给别人
 		if rf.isHeartBeatTimeOut() && rf.VotedFor == -1 && rf.role == Follower {
-			rf.mu.Unlock()
 			fmt.Println(rf.me, "start election")
 			rf.startElection()
 		} else {
@@ -368,11 +378,10 @@ func (rf *Raft) ticker() {
 
 // 开始一场选举
 func (rf *Raft) startElection() {
-	rf.mu.Lock()
 	// 初始化投票数据
 	rf.VotedFor = rf.me
-	// 把投给自己设为True,其他人设为False
 	for server := 0; server < len(rf.peers); server++ {
+		// 初始化为只得到来自自己的选票
 		rf.peersVoteGranted[server] = server == rf.me
 	}
 	rf.CurrentTerm += 1
@@ -418,14 +427,12 @@ func (rf *Raft) startElection() {
 			return
 		} else if rf.role == Follower {
 			// 2.其他人成为了Leader,转为Follower了
-			//fmt.Printf("F[%v] another server is Leader now\n", rf.me)
 			rf.VotedFor = -1
 			rf.persist()
 			rf.mu.Unlock()
 			return
 		} else if electionTimeOut.Before(time.Now()) {
 			// 3.选举超时,重新开始选举
-			//fmt.Printf("C[%v] election time out\n", rf.me)
 			rf.VotedFor = -1
 			rf.role = Follower
 			rf.persist()
@@ -450,7 +457,7 @@ func (rf *Raft) getGrantedVotes() int {
 
 // 并行地向所有Peers收集选票
 func (rf *Raft) collectVotes() {
-	// 询问某个Server要求选票
+	// 向某个Server要求选票
 	askVote := func(server int, args *RequestVoteArgs) {
 		reply := &RequestVoteReply{}
 		ok := rf.sendRequestVote(server, args, reply)
@@ -459,21 +466,19 @@ func (rf *Raft) collectVotes() {
 		// 检查投票结果
 		rf.peersVoteGranted[server] = false
 		if ok && reply.VoteGranted {
-			// 如果投票给了自己
 			rf.peersVoteGranted[server] = true
 		} else if reply.FollowerTerm > rf.CurrentTerm {
 			// 如果接收到的RPC请求或响应中,任期号T>CurrentTerm,那么就令currentTerm等于T,并且切换状态为Follower
 			rf.transToFollower(reply.FollowerTerm)
 		}
 	}
+	// args保持一致
 	rf.mu.Lock()
-	// 持续并行的向所有人要求投票给自己,Args保持一致
 	askVoteArgs := &RequestVoteArgs{
-		CandidateTerm:         rf.CurrentTerm,
-		CandidateIndex:        rf.me,
-		CandidateLastLogIndex: 0,
-		CandidateLastLogTerm:  0,
+		CandidateTerm:  rf.CurrentTerm,
+		CandidateIndex: rf.me,
 	}
+	rf.mu.Unlock()
 	// 填入Leader的最后一条Log的Term和Index,给Follower校验后更新commitIndex
 	if len(rf.Logs) > 0 {
 		askVoteArgs.CandidateLastLogIndex = len(rf.Logs)
@@ -484,7 +489,6 @@ func (rf *Raft) collectVotes() {
 			go askVote(server, askVoteArgs)
 		}
 	}
-	rf.mu.Unlock()
 }
 
 // Leader持续更新自己的已提交logs
@@ -529,11 +533,11 @@ func (rf *Raft) updateCommitIndex(commitIndex int) {
 	if commitIndex > rf.commitIndex {
 		fmt.Printf("s[%v] update commitIndex [%v]->[%v]\n", rf.me, rf.commitIndex, commitIndex)
 		//fmt.Printf("s[%v] logs:[%v]\n", rf.me, rf.Logs)
-		// index是Log内的commandIndex(从1开始)
 		for index := rf.commitIndex + 1; index <= commitIndex; index++ {
-			// index转为下标
-			rf.Logs[index-1].CommandValid = true
-			rf.applyCh <- rf.Logs[index-1]
+			if rf.Logs[index-1].CommandValid == false {
+				rf.Logs[index-1].CommandValid = true
+				rf.applyCh <- rf.Logs[index-1]
+			}
 		}
 		rf.commitIndex = commitIndex
 		rf.persist()
@@ -543,7 +547,6 @@ func (rf *Raft) updateCommitIndex(commitIndex int) {
 func (rf *Raft) pushLogsToFollower(server int, startTerm int) {
 	// 如果推送失败就要立即Retry
 	retry := false
-	// todo:测试,默认开启时push一次
 	for rf.killed() == false {
 		rf.mu.Lock()
 		if rf.role != Leader || rf.CurrentTerm != startTerm {
@@ -554,7 +557,7 @@ func (rf *Raft) pushLogsToFollower(server int, startTerm int) {
 		}
 		if len(rf.Logs) >= rf.nextIndex[server] || retry {
 			// nextIndex最小要为1
-			followerNextIndex := int(math.Max(float64(rf.nextIndex[server]), 1))
+			followerNextIndex := max(rf.nextIndex[server], 1)
 			pushLogs := make([]ApplyMsg, len(rf.Logs[followerNextIndex-1:]))
 			// 必须Copy不能直接传,不然会导致Race
 			copy(pushLogs, rf.Logs[followerNextIndex-1:])
@@ -586,13 +589,6 @@ func (rf *Raft) pushLogsToFollower(server int, startTerm int) {
 					if index, ok := rf.termIndex[pushReply.ConflictTerm]; ok {
 						// Leader有对应Term的Log
 						rf.nextIndex[server] = index + 1
-						//for ; index <= len(rf.Logs); index++ {
-						//	if rf.Logs[index-1].CommandTerm == pushReply.ConflictTerm {
-						//		rf.nextIndex[server] = index + 1
-						//	} else {
-						//		break
-						//	}
-						//}
 					} else {
 						// Leader没有对应Term的Log
 						rf.nextIndex[server] = pushReply.ConflictIndex
@@ -725,19 +721,35 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 	if len(args.Logs) > 0 {
 		rf.lastNewLogIndex = args.Logs[len(args.Logs)-1].CommandIndex
 	}
+	for index := 0; index < len(args.Logs); index++ {
+		args.Logs[index].CommandValid = false
+	}
 	// AppendEntries Pack的检查和处理
 	if args.PrevLogIndex == 0 && len(args.Logs) != 0 {
-		// 如果是第一条Log不校验,persist在后面,Follower接受到的Logs,已提交状态初始为False
+		// 如果是第一条Log不校验
 		rf.Logs = args.Logs
 		reply.Success = true
 		rf.persist()
-		rf.updateCommitIndex(int(math.Min(float64(args.LeaderCommit), float64(rf.lastNewLogIndex))))
+		rf.updateCommitIndex(min(args.LeaderCommit, rf.lastNewLogIndex))
 	} else if args.PrevLogIndex != 0 && args.PrevLogIndex <= len(rf.Logs) && rf.Logs[args.PrevLogIndex-1].CommandTerm == args.PrevLogTerm {
-		// 校验正常 可以正常追加,persist在后面
+		// 校验正常,可以正常追加
 		rf.Logs = append(rf.Logs[:args.PrevLogIndex], args.Logs...)
+		//for _, log := range args.Logs {
+		//	log.CommandValid = false
+		//	if len(rf.Logs) >= log.CommandIndex {
+		//		// 存在这条Log,检查
+		//		if log.CommandTerm != rf.Logs[log.CommandIndex-1].CommandTerm {
+		//			rf.Logs = rf.Logs[:log.CommandIndex-1]
+		//			rf.Logs = append(rf.Logs, log)
+		//		}
+		//	} else {
+		//		// 不存在这条Log,追加
+		//		rf.Logs = append(rf.Logs, log)
+		//	}
+		//}
 		reply.Success = true
 		rf.persist()
-		rf.updateCommitIndex(int(math.Min(float64(args.LeaderCommit), float64(rf.lastNewLogIndex))))
+		rf.updateCommitIndex(min(args.LeaderCommit, rf.lastNewLogIndex))
 	} else if args.PrevLogIndex != 0 && args.PrevLogIndex <= len(rf.Logs) && rf.Logs[args.PrevLogIndex-1].CommandTerm != args.PrevLogTerm {
 		// 发生冲突,索引相同任期不同,删除从PrevLogIndex开始之后的所有Log
 		reply.ConflictTerm = rf.Logs[args.PrevLogIndex-1].CommandTerm
@@ -747,7 +759,7 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 				break
 			}
 		}
-		rf.Logs = rf.Logs[:args.PrevLogIndex]
+		rf.Logs = rf.Logs[:args.PrevLogIndex-1]
 		reply.Success = false
 		rf.persist()
 		return
