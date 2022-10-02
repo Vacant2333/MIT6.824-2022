@@ -66,10 +66,10 @@ const (
 	ElectionSleepTime = 10 * time.Millisecond  // 选举睡眠时间
 	HeartBeatSendTime = 110 * time.Millisecond // 心跳包发送时间 ms
 
-	PushLogsTime           = 10 * time.Millisecond // Leader推送Log的间隔时间
+	PushLogsTime           = 1 * time.Millisecond  // Leader推送Log的间隔时间
 	checkCommittedLogsTime = 30 * time.Millisecond // Leader更新CommitIndex的间隔时间
 
-	ElectionTimeOutMin = 300 // 选举超时时间(也用于检查是否需要开始选举) 区间 todo:可能要450+?
+	ElectionTimeOutMin = 425 // 选举超时时间(也用于检查是否需要开始选举) 区间
 	ElectionTimeOutMax = 600
 )
 
@@ -538,7 +538,7 @@ func (rf *Raft) updateCommitIndex(commitIndex int) {
 
 func (rf *Raft) pushLogsToFollower(server int, startTerm int) {
 	// 如果推送失败就要立即Retry
-	retry := true
+	retry := false
 	// todo:测试,默认开启时push一次
 	for rf.killed() == false {
 		rf.mu.Lock()
@@ -575,23 +575,30 @@ func (rf *Raft) pushLogsToFollower(server int, startTerm int) {
 				// 推送失败但是请求成功,减少nextIndex且重试
 				retry = true
 				// 发送前和发送后的nextIndex不匹配
-				if followerNextIndex != rf.nextIndex[server] {
-					fmt.Printf("s[%v] continue\n", server)
-					rf.mu.Unlock()
-					continue
-				}
+				//if followerNextIndex != rf.nextIndex[server] {
+				//	fmt.Printf("s[%v] continue\n", server)
+				//	rf.mu.Unlock()
+				//	continue
+				//}
 				old := rf.nextIndex[server]
-				if pushReply.XTerm != -1 {
-					if index, ok := rf.termIndex[pushReply.XTerm]; ok {
+				if pushReply.ConflictTerm != -1 {
+					if index, ok := rf.termIndex[pushReply.ConflictTerm]; ok {
 						// Leader有对应Term的Log
-						rf.nextIndex[server] = index - 1
+						rf.nextIndex[server] = index
+						for ; index <= len(rf.Logs); index++ {
+							if rf.Logs[index-1].CommandTerm == pushReply.ConflictTerm {
+								rf.nextIndex[server] = index + 1
+							} else {
+								break
+							}
+						}
 					} else {
 						// Leader没有对应Term的Log
-						rf.nextIndex[server] = pushReply.XIndex
+						rf.nextIndex[server] = pushReply.ConflictIndex
 					}
 				} else {
 					// Follower的日志太短了
-					rf.nextIndex[server] = pushReply.XLen + 1
+					rf.nextIndex[server] = pushReply.ConflictIndex
 				}
 				fmt.Printf("s[%v] nextIndex:[%v]->[%v]\n", server, old, rf.nextIndex[server])
 			} else {
@@ -691,11 +698,10 @@ type AppendEnTriesArgs struct {
 }
 
 type AppendEntriesReply struct {
-	FollowerTerm int  // Follower的Term,给Leader更新自己的Term
-	Success      bool // 是否推送成功
-	XTerm        int
-	XIndex       int
-	XLen         int
+	FollowerTerm  int  // Follower的Term,给Leader更新自己的Term
+	Success       bool // 是否推送成功
+	ConflictIndex int
+	ConflictTerm  int
 }
 
 // AppendEntries Follower接收Leader的追加/心跳包
@@ -730,23 +736,21 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 		rf.updateCommitIndex(int(math.Min(float64(args.LeaderCommit), float64(len(rf.Logs)))))
 	} else if args.PrevLogIndex != 0 && args.PrevLogIndex <= len(rf.Logs) && rf.Logs[args.PrevLogIndex-1].CommandTerm != args.PrevLogTerm {
 		// 发生冲突,索引相同任期不同,删除从PrevLogIndex开始之后的所有Log
-		reply.XTerm = rf.Logs[args.PrevLogIndex-1].CommandTerm
+		reply.ConflictTerm = rf.Logs[args.PrevLogIndex-1].CommandTerm
 		for i := 0; i < len(rf.Logs); i++ {
-			if rf.Logs[i].CommandTerm == reply.XTerm {
-				reply.XIndex = i + 1
+			if rf.Logs[i].CommandTerm == reply.ConflictTerm {
+				reply.ConflictIndex = i + 1
 				break
 			}
 		}
-		reply.XLen = -1
-		rf.Logs = rf.Logs[:args.PrevLogIndex-1]
+		rf.Logs = rf.Logs[:args.PrevLogIndex]
 		reply.Success = false
 		rf.persist()
 		return
 	} else {
 		// 校验失败.Follower在PreLogIndex的位置没有条目
-		reply.XTerm = -1
-		reply.XIndex = -1
-		reply.XLen = len(rf.Logs)
+		reply.ConflictTerm = -1
+		reply.ConflictIndex = len(rf.Logs)
 		reply.Success = false
 		return
 	}
