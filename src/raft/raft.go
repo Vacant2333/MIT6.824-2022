@@ -23,7 +23,6 @@ import (
 	"math/rand"
 	"mit6.824/labgob"
 	"sort"
-
 	//	"bytes"
 	"sync"
 	"sync/atomic"
@@ -61,14 +60,14 @@ const (
 	Candidate = 2
 	Leader    = 3
 
-	TickerSleepTime   = 15 * time.Millisecond  // Ticker 睡眠时间 ms
-	ElectionSleepTime = 10 * time.Millisecond  // 选举睡眠时间
-	HeartBeatSendTime = 110 * time.Millisecond // 心跳包发送时间 ms
+	TickerSleepTime   = 25 * time.Millisecond  // Ticker 睡眠时间 ms
+	ElectionSleepTime = 20 * time.Millisecond  // 选举睡眠时间
+	HeartBeatSendTime = 120 * time.Millisecond // 心跳包发送时间 ms
 
-	PushLogsTime           = 1 * time.Millisecond  // Leader推送Log的间隔时间
-	checkCommittedLogsTime = 30 * time.Millisecond // Leader更新CommitIndex的间隔时间
+	PushLogsTime           = 3 * time.Millisecond  // Leader推送Log的间隔时间
+	checkCommittedLogsTime = 35 * time.Millisecond // Leader更新CommitIndex的间隔时间
 
-	ElectionTimeOutMin = 425 // 选举超时时间(也用于检查是否需要开始选举) 区间
+	ElectionTimeOutMin = 450 // 选举超时时间(也用于检查是否需要开始选举) 区间
 	ElectionTimeOutMax = 600
 )
 
@@ -122,7 +121,6 @@ type Raft struct {
 	matchIndex       []int         // (only Leader,成为Leader后初始化)对于每台服务器,已知的已复制到该服务器的最高索引(默认为0,单调递增)
 	termIndex        map[int]int
 	// 2B end
-	lastNewLogIndex int
 }
 
 // GetState return CurrentTerm and whether this server
@@ -155,6 +153,7 @@ func (rf *Raft) persist() {
 	rf.persister.SaveRaftState(data)
 }
 
+//
 // restore previously persisted state.
 // 读取状态,必须在Lock的时候使用
 func (rf *Raft) readPersist(data []byte) {
@@ -165,13 +164,22 @@ func (rf *Raft) readPersist(data []byte) {
 	decoder := labgob.NewDecoder(reader)
 	var votedFor, currentTerm int
 	var logs []ApplyMsg
-	if decoder.Decode(&votedFor) == nil &&
-		decoder.Decode(&currentTerm) == nil &&
-		decoder.Decode(&logs) == nil {
+	if decoder.Decode(&votedFor) != nil ||
+		decoder.Decode(&currentTerm) != nil ||
+		decoder.Decode(&logs) != nil {
+		fmt.Printf("s[%v] readPersist error\n", rf.me)
+	} else {
 		rf.VotedFor = votedFor
 		rf.CurrentTerm = currentTerm
 		rf.Logs = logs
 	}
+	//if decoder.Decode(&votedFor) == nil &&
+	//	decoder.Decode(&currentTerm) == nil &&
+	//	decoder.Decode(&logs) == nil {
+	//	rf.VotedFor = votedFor
+	//	rf.CurrentTerm = currentTerm
+	//	rf.Logs = logs
+	//}
 	fmt.Printf("s[%v] readPersist logs:%v\n", rf.me, len(logs))
 }
 
@@ -367,6 +375,7 @@ func (rf *Raft) ticker() {
 		rf.mu.Lock()
 		// 检查是否要开始领导选举,检查超时时间和角色,并且没有投票给别人
 		if rf.isHeartBeatTimeOut() && rf.VotedFor == -1 && rf.role == Follower {
+			rf.mu.Unlock()
 			fmt.Println(rf.me, "start election")
 			rf.startElection()
 		} else {
@@ -378,6 +387,7 @@ func (rf *Raft) ticker() {
 
 // 开始一场选举
 func (rf *Raft) startElection() {
+	rf.mu.Lock()
 	// 初始化投票数据
 	rf.VotedFor = rf.me
 	for server := 0; server < len(rf.peers); server++ {
@@ -400,7 +410,7 @@ func (rf *Raft) startElection() {
 			// 1.赢得了大部分选票,成为Leader
 			fmt.Printf("L[%v] is a Leader now Term:[%v]\n", rf.me, rf.CurrentTerm)
 			rf.role = Leader
-			rf.VotedFor = -1
+			//rf.VotedFor = -1
 			// 初始化Leader需要的内容
 			rf.nextIndex = make([]int, len(rf.peers))
 			rf.matchIndex = make([]int, len(rf.peers))
@@ -419,7 +429,7 @@ func (rf *Raft) startElection() {
 					rf.termIndex[rf.Logs[i].CommandTerm] = i + 1
 				}
 			}
-			rf.persist()
+			//rf.persist()
 			rf.mu.Unlock()
 			// 持续发送心跳包
 			go rf.sendHeartBeatsToAll()
@@ -428,14 +438,14 @@ func (rf *Raft) startElection() {
 		} else if rf.role == Follower {
 			// 2.其他人成为了Leader,转为Follower了
 			rf.VotedFor = -1
-			rf.persist()
+			//rf.persist()
 			rf.mu.Unlock()
 			return
 		} else if electionTimeOut.Before(time.Now()) {
 			// 3.选举超时,重新开始选举
 			rf.VotedFor = -1
 			rf.role = Follower
-			rf.persist()
+			//rf.persist()
 			rf.mu.Unlock()
 			return
 		}
@@ -533,10 +543,16 @@ func (rf *Raft) updateCommitIndex(commitIndex int) {
 	if commitIndex > rf.commitIndex {
 		fmt.Printf("s[%v] update commitIndex [%v]->[%v]\n", rf.me, rf.commitIndex, commitIndex)
 		//fmt.Printf("s[%v] logs:[%v]\n", rf.me, rf.Logs)
-		for index := rf.commitIndex + 1; index <= commitIndex; index++ {
-			if rf.Logs[index-1].CommandValid == false {
-				rf.Logs[index-1].CommandValid = true
-				rf.applyCh <- rf.Logs[index-1]
+		//for index := rf.commitIndex + 1; index <= commitIndex; index++ {
+		//	if rf.Logs[index-1].CommandValid == false {
+		//		rf.Logs[index-1].CommandValid = true
+		//		rf.applyCh <- rf.Logs[index-1]
+		//	}
+		//}
+		for index := 0; index < commitIndex; index++ {
+			if rf.Logs[index].CommandValid == false {
+				rf.Logs[index].CommandValid = true
+				rf.applyCh <- rf.Logs[index]
 			}
 		}
 		rf.commitIndex = commitIndex
@@ -565,7 +581,8 @@ func (rf *Raft) pushLogsToFollower(server int, startTerm int) {
 			pushOk, pushReply := rf.sendAppendEntries(pushLogs, followerNextIndex, server)
 			if pushReply.Success {
 				// 检查推送完成后是否为最新,不为则继续Push,更新Follower的nextIndex,matchIndex
-				retry = len(rf.Logs) != pushLastIndex
+				//retry = len(rf.Logs) != pushLastIndex
+				retry = false
 				rf.nextIndex[server] = pushLastIndex + 1
 				rf.matchIndex[server] = pushLastIndex
 				fmt.Printf("L[%v] push log to F[%v] success,Leader LogsLen:[%v] pushLast:[%v] pushLen:[%v]\n", rf.me, server, len(rf.Logs), pushLastIndex, len(pushLogs))
@@ -578,24 +595,24 @@ func (rf *Raft) pushLogsToFollower(server int, startTerm int) {
 			} else if pushOk {
 				// 推送失败但是请求成功,减少nextIndex且重试
 				retry = true
-				// 发送前和发送后的nextIndex不匹配
-				//if followerNextIndex != rf.nextIndex[server] {
-				//	fmt.Printf("s[%v] continue\n", server)
-				//	rf.mu.Unlock()
-				//	continue
-				//}
+				if followerNextIndex != rf.nextIndex[server] {
+					// 发送前和发送后的nextIndex不匹配
+					fmt.Printf("F[%v] status is not match in L[%v]\n", server, rf.me)
+					rf.mu.Unlock()
+					continue
+				}
 				old := rf.nextIndex[server]
-				if pushReply.ConflictTerm != -1 {
-					if index, ok := rf.termIndex[pushReply.ConflictTerm]; ok {
+				if pushReply.XTerm != -1 {
+					if index, ok := rf.termIndex[pushReply.XTerm]; ok {
 						// Leader有对应Term的Log
-						rf.nextIndex[server] = index + 1
+						rf.nextIndex[server] = index
 					} else {
 						// Leader没有对应Term的Log
-						rf.nextIndex[server] = pushReply.ConflictIndex
+						rf.nextIndex[server] = pushReply.XIndex
 					}
 				} else {
 					// Follower的日志太短了
-					rf.nextIndex[server] = pushReply.ConflictIndex
+					rf.nextIndex[server] = pushReply.XLen + 1
 				}
 				fmt.Printf("s[%v] nextIndex:[%v]->[%v]\n", server, old, rf.nextIndex[server])
 			} else {
@@ -613,8 +630,6 @@ func (rf *Raft) sendAppendEntries(logs []ApplyMsg, nextIndex int, server int) (b
 	args := &AppendEnTriesArgs{
 		LeaderTerm:   rf.CurrentTerm,
 		LeaderIndex:  rf.me,
-		PrevLogIndex: 0,
-		PrevLogTerm:  0,
 		Logs:         logs,
 		LeaderCommit: rf.commitIndex,
 	}
@@ -695,10 +710,11 @@ type AppendEnTriesArgs struct {
 }
 
 type AppendEntriesReply struct {
-	FollowerTerm  int  // Follower的Term,给Leader更新自己的Term
-	Success       bool // 是否推送成功
-	ConflictIndex int
-	ConflictTerm  int
+	FollowerTerm int  // Follower的Term,给Leader更新自己的Term
+	Success      bool // 是否推送成功
+	XTerm        int
+	XIndex       int
+	XLen         int
 }
 
 // AppendEntries Follower接收Leader的追加/心跳包
@@ -719,56 +735,44 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 	rf.VotedFor = -1
 	rf.role = Follower
 	if len(args.Logs) > 0 {
-		rf.lastNewLogIndex = args.Logs[len(args.Logs)-1].CommandIndex
-	}
-	for index := 0; index < len(args.Logs); index++ {
-		args.Logs[index].CommandValid = false
-	}
-	// AppendEntries Pack的检查和处理
-	if args.PrevLogIndex == 0 && len(args.Logs) != 0 {
-		// 如果是第一条Log不校验
-		rf.Logs = args.Logs
-		reply.Success = true
-		rf.persist()
-		rf.updateCommitIndex(min(args.LeaderCommit, rf.lastNewLogIndex))
-	} else if args.PrevLogIndex != 0 && args.PrevLogIndex <= len(rf.Logs) && rf.Logs[args.PrevLogIndex-1].CommandTerm == args.PrevLogTerm {
-		// 校验正常,可以正常追加
-		rf.Logs = append(rf.Logs[:args.PrevLogIndex], args.Logs...)
-		//for _, log := range args.Logs {
-		//	log.CommandValid = false
-		//	if len(rf.Logs) >= log.CommandIndex {
-		//		// 存在这条Log,检查
-		//		if log.CommandTerm != rf.Logs[log.CommandIndex-1].CommandTerm {
-		//			rf.Logs = rf.Logs[:log.CommandIndex-1]
-		//			rf.Logs = append(rf.Logs, log)
-		//		}
-		//	} else {
-		//		// 不存在这条Log,追加
-		//		rf.Logs = append(rf.Logs, log)
-		//	}
-		//}
-		reply.Success = true
-		rf.persist()
-		rf.updateCommitIndex(min(args.LeaderCommit, rf.lastNewLogIndex))
-	} else if args.PrevLogIndex != 0 && args.PrevLogIndex <= len(rf.Logs) && rf.Logs[args.PrevLogIndex-1].CommandTerm != args.PrevLogTerm {
-		// 发生冲突,索引相同任期不同,删除从PrevLogIndex开始之后的所有Log
-		reply.ConflictTerm = rf.Logs[args.PrevLogIndex-1].CommandTerm
-		for i := 0; i < len(rf.Logs); i++ {
-			if rf.Logs[i].CommandTerm == reply.ConflictTerm {
-				reply.ConflictIndex = i + 1
-				break
-			}
+		// Follower接受到的Logs状态设为False
+		for index := 0; index < len(args.Logs); index++ {
+			args.Logs[index].CommandValid = false
 		}
-		rf.Logs = rf.Logs[:args.PrevLogIndex-1]
-		reply.Success = false
-		rf.persist()
-		return
-	} else {
-		// 校验失败.Follower在PreLogIndex的位置没有条目
-		reply.ConflictTerm = -1
-		reply.ConflictIndex = len(rf.Logs)
-		reply.Success = false
-		return
+		if args.PrevLogIndex == 0 {
+			// 如果是第一条Log不校验
+			rf.Logs = args.Logs
+			reply.Success = true
+		} else if args.PrevLogIndex <= len(rf.Logs) && rf.Logs[args.PrevLogIndex-1].CommandTerm == args.PrevLogTerm {
+			// 校验正常,可以正常追加
+			rf.Logs = append(rf.Logs[:args.PrevLogIndex], args.Logs...)
+			reply.Success = true
+		} else if args.PrevLogIndex <= len(rf.Logs) && rf.Logs[args.PrevLogIndex-1].CommandTerm != args.PrevLogTerm {
+			// 发生冲突,索引相同任期不同,删除从PrevLogIndex开始之后的所有Log
+			reply.XTerm = rf.Logs[args.PrevLogIndex-1].CommandTerm
+			for i := 0; i < len(rf.Logs); i++ {
+				if rf.Logs[i].CommandTerm == reply.XTerm {
+					reply.XIndex = i + 1
+					break
+				}
+			}
+			reply.XLen = -1
+			rf.Logs = rf.Logs[:args.PrevLogIndex-1]
+			reply.Success = false
+			rf.persist()
+			return
+		} else {
+			// 校验失败.Follower在PreLogIndex的位置没有条目
+			reply.XTerm = -1
+			reply.XIndex = -1
+			reply.XLen = len(rf.Logs)
+			reply.Success = false
+			return
+		}
+	}
+	rf.persist()
+	if args.LeaderCommit > rf.commitIndex && len(rf.Logs) == args.PrevLogIndex && rf.Logs[len(rf.Logs)-1].CommandTerm == args.PrevLogTerm {
+		rf.updateCommitIndex(min(args.LeaderCommit, len(rf.Logs)))
 	}
 }
 
