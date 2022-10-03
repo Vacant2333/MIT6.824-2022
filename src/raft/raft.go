@@ -122,6 +122,7 @@ type Raft struct {
 	matchIndex       []int         // (only Leader,成为Leader后初始化)对于每台服务器,已知的已复制到该服务器的最高索引(默认为0,单调递增)
 	termIndex        map[int]int
 	// 2B end
+	lastNewEntryIndex int
 }
 
 // GetState return CurrentTerm and whether this server
@@ -737,8 +738,11 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 		// 如果是第一条Log不校验
 		rf.Logs = args.Logs
 		reply.Success = true
-		if len(args.Logs) > 0 {
-			rf.updateCommitIndex(min(args.LeaderCommit, args.Logs[len(args.Logs)-1].CommandIndex))
+		//if len(args.Logs) > 0 {
+		//	rf.updateCommitIndex(min(args.LeaderCommit, args.Logs[len(args.Logs)-1].CommandIndex))
+		//}
+		if len(args.Logs) > 0 && args.Logs[len(args.Logs)-1].CommandIndex > rf.lastNewEntryIndex {
+			rf.lastNewEntryIndex = args.Logs[len(args.Logs)-1].CommandIndex
 		}
 	} else if args.PrevLogIndex <= len(rf.Logs) && rf.Logs[args.PrevLogIndex-1].CommandTerm == args.PrevLogTerm {
 		// 校验正常,可以正常追加,逐条追加,index为在Follower的Logs中的下一个Log的Index
@@ -757,9 +761,12 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 			index++
 		}
 		reply.Success = true
-		if len(args.Logs) > 0 {
-			rf.updateCommitIndex(min(args.LeaderCommit, args.Logs[len(args.Logs)-1].CommandIndex))
+		if len(args.Logs) > 0 && args.Logs[len(args.Logs)-1].CommandIndex > rf.lastNewEntryIndex {
+			rf.lastNewEntryIndex = args.Logs[len(args.Logs)-1].CommandIndex
 		}
+		//if len(args.Logs) > 0 {
+		//	rf.updateCommitIndex(min(args.LeaderCommit, args.Logs[len(args.Logs)-1].CommandIndex))
+		//}
 	} else if args.PrevLogIndex <= len(rf.Logs) && rf.Logs[args.PrevLogIndex-1].CommandTerm != args.PrevLogTerm {
 		// 发生冲突,索引相同任期不同,删除从PrevLogIndex开始之后的所有Log
 		reply.XTerm = rf.Logs[args.PrevLogIndex-1].CommandTerm
@@ -783,10 +790,10 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 		return
 	}
 	rf.persist()
-	//if args.LeaderCommit > rf.commitIndex && len(rf.Logs) == args.PrevLogIndex && rf.Logs[len(rf.Logs)-1].CommandTerm == args.PrevLogTerm {
-	//	//rf.updateCommitIndex(min(args.LeaderCommit, len(rf.Logs)))
-	//	rf.updateCommitIndex(min(args.LeaderCommit, len(rf.Logs)))
-	//}
+	if args.LeaderCommit > rf.commitIndex && len(rf.Logs) == args.PrevLogIndex && rf.Logs[len(rf.Logs)-1].CommandTerm == args.PrevLogTerm {
+		//rf.updateCommitIndex(min(args.LeaderCommit, len(rf.Logs)))
+		rf.updateCommitIndex(min(args.LeaderCommit, rf.lastNewEntryIndex))
+	}
 }
 
 //
