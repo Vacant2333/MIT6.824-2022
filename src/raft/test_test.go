@@ -832,8 +832,7 @@ func TestFigure82C(t *testing.T) {
 	defer cfg.cleanup()
 
 	cfg.begin("Test (2C): Figure 8")
-	// todo:删掉取余 3个
-	cfg.one(rand.Int()%100000, 1, true)
+	cfg.one(rand.Int(), 1, true)
 
 	nup := servers
 	for iters := 0; iters < 1000; iters++ {
@@ -841,7 +840,7 @@ func TestFigure82C(t *testing.T) {
 		leader := -1
 		for i := 0; i < servers; i++ {
 			if cfg.rafts[i] != nil {
-				_, _, ok := cfg.rafts[i].Start(rand.Int() % 1000)
+				_, _, ok := cfg.rafts[i].Start(rand.Int())
 				if ok {
 					leader = i
 				}
@@ -882,7 +881,7 @@ func TestFigure82C(t *testing.T) {
 		}
 	}
 	fmt.Println("---one")
-	cfg.one(rand.Int()%10000, servers, true)
+	cfg.one(rand.Int(), servers, true)
 
 	cfg.end()
 }

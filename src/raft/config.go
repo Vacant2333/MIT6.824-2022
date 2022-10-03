@@ -609,8 +609,6 @@ func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 		}
 	}
 	if cfg.checkFinished() == false {
-		// todo:check one leader会延长测试时间
-		fmt.Println("Test: one end time:", time.Now().Sub(t0).Milliseconds(), "check leader:", cfg.checkOneLeader())
 		cfg.t.Fatalf("one(%v) failed to reach agreement", cmd)
 	}
 	return -1

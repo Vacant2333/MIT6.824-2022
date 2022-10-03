@@ -118,11 +118,13 @@ type Raft struct {
 	Logs             []ApplyMsg    // (持久化)日志条目;每个条目包含了用于状态机的命令,以及领导者接收到该条目时的任期(第一个索引为1)
 	commitIndex      int           // 日志中最后一条提交了的Log的下标(易失,初始为0,单调递增)
 	lastAppliedIndex int           // 日志中被应用到状态机的最高一条的下标(易失,初始为0,单调递增)
-	nextIndex        []int         // (only Leader,成为Leader后初始化)对于每台服务器,发送的下一条log的索引(初始为Leader的最大索引+1)
-	matchIndex       []int         // (only Leader,成为Leader后初始化)对于每台服务器,已知的已复制到该服务器的最高索引(默认为0,单调递增)
-	termIndex        map[int]int
+	nextIndex        []int         // (for Leader,成为Leader后初始化)对于每台服务器,发送的下一条log的索引(初始为Leader的最大索引+1)
+	matchIndex       []int         // (for Leader,成为Leader后初始化)对于每台服务器,已知的已复制到该服务器的最高索引(默认为0,单调递增)
+	termIndex        map[int]int   // (for Leader,成为Leader后初始化)Logs中每个Term的第一条Log的Index
 	// 2B end
-	lastNewEntryIndex int
+	// 2C start
+	lastNewEntryIndex int // (for Follower)最后一个新Entre的Index,用于更新commitIndex
+	// 2C end
 }
 
 // GetState return CurrentTerm and whether this server
@@ -553,7 +555,7 @@ func (rf *Raft) checkCommittedLogs() {
 func (rf *Raft) updateCommitIndex(commitIndex int) {
 	if commitIndex > rf.commitIndex {
 		fmt.Printf("s[%v] update commitIndex [%v]->[%v]\n", rf.me, rf.commitIndex, commitIndex)
-		rf.commitIndex = commitIndex
+		rf.commitIndex = min(commitIndex, len(rf.Logs))
 	}
 }
 
@@ -790,7 +792,8 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 		return
 	}
 	rf.persist()
-	if args.LeaderCommit > rf.commitIndex && len(rf.Logs) == args.PrevLogIndex && rf.Logs[len(rf.Logs)-1].CommandTerm == args.PrevLogTerm {
+	//if args.LeaderCommit > rf.commitIndex && len(rf.Logs) == args.PrevLogIndex && rf.Logs[len(rf.Logs)-1].CommandTerm == args.PrevLogTerm {
+	if args.LeaderCommit > rf.commitIndex {
 		//rf.updateCommitIndex(min(args.LeaderCommit, len(rf.Logs)))
 		rf.updateCommitIndex(min(args.LeaderCommit, rf.lastNewEntryIndex))
 	}
