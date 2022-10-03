@@ -60,16 +60,15 @@ const (
 	Candidate = 2
 	Leader    = 3
 
-	TickerSleepTime   = 25 * time.Millisecond  // Ticker 睡眠时间 ms
-	ElectionSleepTime = 20 * time.Millisecond  // 选举睡眠时间
-	HeartBeatSendTime = 120 * time.Millisecond // 心跳包发送时间 ms
+	TickerSleepTime   = 10 * time.Millisecond  // Ticker 睡眠时间 ms
+	ElectionSleepTime = 5 * time.Millisecond   // 选举睡眠时间
+	HeartBeatSendTime = 105 * time.Millisecond // 心跳包发送时间 ms
 
-	PushLogsTime           = 3 * time.Millisecond  // Leader推送Log的间隔时间
-	checkCommittedLogsTime = 35 * time.Millisecond // Leader更新CommitIndex的间隔时间
+	PushLogsTime           = 2 * time.Millisecond  // Leader推送Log的间隔时间
+	checkCommittedLogsTime = 10 * time.Millisecond // Leader更新CommitIndex的间隔时间
 
-	ElectionTimeOutMin = 450 // 选举超时时间(也用于检查是否需要开始选举) 区间
+	ElectionTimeOutMin = 400 // 选举超时时间(也用于检查是否需要开始选举) 区间
 	ElectionTimeOutMax = 600
-	// 450-600
 )
 
 func min(a int, b int) int {
@@ -562,7 +561,7 @@ func (rf *Raft) updateCommitIndex(commitIndex int) {
 
 func (rf *Raft) pushLogsToFollower(server int, startTerm int) {
 	// 如果推送失败就要立即Retry
-	retry := false
+	retry := true
 	for rf.killed() == false {
 		rf.mu.Lock()
 		if rf.role != Leader || rf.CurrentTerm != startTerm {
@@ -573,7 +572,7 @@ func (rf *Raft) pushLogsToFollower(server int, startTerm int) {
 		}
 		if len(rf.Logs) >= rf.nextIndex[server] || retry {
 			// nextIndex最小要为1
-			followerNextIndex := max(rf.nextIndex[server], 1)
+			followerNextIndex := rf.nextIndex[server]
 			pushLogs := make([]ApplyMsg, len(rf.Logs[followerNextIndex-1:]))
 			// 必须Copy不能直接传,不然会导致Race
 			copy(pushLogs, rf.Logs[followerNextIndex-1:])
@@ -606,9 +605,11 @@ func (rf *Raft) pushLogsToFollower(server int, startTerm int) {
 					if index, ok := rf.termIndex[pushReply.XTerm]; ok {
 						// Leader有对应Term的Log
 						rf.nextIndex[server] = index
+						fmt.Println("111")
 					} else {
 						// Leader没有对应Term的Log
 						rf.nextIndex[server] = pushReply.XIndex
+						fmt.Println("222")
 					}
 				} else {
 					// Follower的日志太短了
@@ -619,6 +620,7 @@ func (rf *Raft) pushLogsToFollower(server int, startTerm int) {
 				// 推送请求失败,可能服务器挂了或者超时
 				retry = true
 			}
+			rf.nextIndex[server] = max(rf.nextIndex[server], 1)
 		}
 		rf.mu.Unlock()
 		time.Sleep(PushLogsTime)
@@ -734,42 +736,42 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 	rf.heartBeatTimeOut = time.Now().Add(getRandElectionTimeOut())
 	rf.VotedFor = -1
 	rf.role = Follower
-	if len(args.Logs) > 0 {
-		// Follower接受到的Logs状态设为False
-		for index := 0; index < len(args.Logs); index++ {
-			args.Logs[index].CommandValid = false
-		}
-		if args.PrevLogIndex == 0 {
-			// 如果是第一条Log不校验
-			rf.Logs = args.Logs
-			reply.Success = true
-		} else if args.PrevLogIndex <= len(rf.Logs) && rf.Logs[args.PrevLogIndex-1].CommandTerm == args.PrevLogTerm {
-			// 校验正常,可以正常追加
-			rf.Logs = append(rf.Logs[:args.PrevLogIndex], args.Logs...)
-			reply.Success = true
-		} else if args.PrevLogIndex <= len(rf.Logs) && rf.Logs[args.PrevLogIndex-1].CommandTerm != args.PrevLogTerm {
-			// 发生冲突,索引相同任期不同,删除从PrevLogIndex开始之后的所有Log
-			reply.XTerm = rf.Logs[args.PrevLogIndex-1].CommandTerm
-			for i := 0; i < len(rf.Logs); i++ {
-				if rf.Logs[i].CommandTerm == reply.XTerm {
-					reply.XIndex = i + 1
-					break
-				}
-			}
-			reply.XLen = -1
-			rf.Logs = rf.Logs[:args.PrevLogIndex-1]
-			reply.Success = false
-			rf.persist()
-			return
-		} else {
-			// 校验失败.Follower在PreLogIndex的位置没有条目
-			reply.XTerm = -1
-			reply.XIndex = -1
-			reply.XLen = len(rf.Logs)
-			reply.Success = false
-			return
-		}
+	//if len(args.Logs) > 0 {
+	// Follower接受到的Logs状态设为False
+	for index := 0; index < len(args.Logs); index++ {
+		args.Logs[index].CommandValid = false
 	}
+	if args.PrevLogIndex == 0 {
+		// 如果是第一条Log不校验
+		rf.Logs = args.Logs
+		reply.Success = true
+	} else if args.PrevLogIndex <= len(rf.Logs) && rf.Logs[args.PrevLogIndex-1].CommandTerm == args.PrevLogTerm {
+		// 校验正常,可以正常追加
+		rf.Logs = append(rf.Logs[:args.PrevLogIndex], args.Logs...)
+		reply.Success = true
+	} else if args.PrevLogIndex <= len(rf.Logs) && rf.Logs[args.PrevLogIndex-1].CommandTerm != args.PrevLogTerm {
+		// 发生冲突,索引相同任期不同,删除从PrevLogIndex开始之后的所有Log
+		reply.XTerm = rf.Logs[args.PrevLogIndex-1].CommandTerm
+		for i := 0; i < len(rf.Logs); i++ {
+			if rf.Logs[i].CommandTerm == reply.XTerm {
+				reply.XIndex = i + 1
+				break
+			}
+		}
+		reply.XLen = -1
+		rf.Logs = rf.Logs[:args.PrevLogIndex-1]
+		reply.Success = false
+		rf.persist()
+		return
+	} else {
+		// 校验失败.Follower在PreLogIndex的位置没有条目
+		reply.XTerm = -1
+		reply.XIndex = -1
+		reply.XLen = len(rf.Logs)
+		reply.Success = false
+		return
+	}
+	//}
 	rf.persist()
 	if args.LeaderCommit > rf.commitIndex && len(rf.Logs) == args.PrevLogIndex && rf.Logs[len(rf.Logs)-1].CommandTerm == args.PrevLogTerm {
 		rf.updateCommitIndex(min(args.LeaderCommit, len(rf.Logs)))
