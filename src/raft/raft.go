@@ -61,14 +61,15 @@ const (
 	Leader    = 3
 
 	TickerSleepTime   = 10 * time.Millisecond  // Ticker 睡眠时间 ms
-	ElectionSleepTime = 5 * time.Millisecond   // 选举睡眠时间
-	HeartBeatSendTime = 105 * time.Millisecond // 心跳包发送时间 ms
+	ApplierSleepTime  = 10 * time.Millisecond  // Applier睡眠时间
+	ElectionSleepTime = 6 * time.Millisecond   // 选举睡眠时间
+	HeartBeatSendTime = 100 * time.Millisecond // 心跳包发送时间 ms
 
 	PushLogsTime           = 2 * time.Millisecond  // Leader推送Log的间隔时间
 	checkCommittedLogsTime = 10 * time.Millisecond // Leader更新CommitIndex的间隔时间
 
-	ElectionTimeOutMin = 400 // 选举超时时间(也用于检查是否需要开始选举) 区间
-	ElectionTimeOutMax = 600
+	ElectionTimeOutMin = 275 // 选举超时时间(也用于检查是否需要开始选举) 区间
+	ElectionTimeOutMax = 500
 )
 
 func min(a int, b int) int {
@@ -113,10 +114,10 @@ type Raft struct {
 	heartBeatTimeOut time.Time // 上一次收到心跳包的时间+随机选举超时时间(在收到心跳包后再次随机一个)
 	// 2A end
 	// 2B start
-	applyCh          chan ApplyMsg // 已提交的Log需要发送到这个Chan里
+	applyCh          chan ApplyMsg // apply的Log发送到这个Chan里
 	Logs             []ApplyMsg    // (持久化)日志条目;每个条目包含了用于状态机的命令,以及领导者接收到该条目时的任期(第一个索引为1)
-	commitIndex      int           // 日志中最后一条提交了的Log的下标(易失,初始为0)
-	lastAppliedIndex int           // 日志中被应用到状态机的最高一条的下标(易失,初始为0)
+	commitIndex      int           // 日志中最后一条提交了的Log的下标(易失,初始为0,单调递增)
+	lastAppliedIndex int           // 日志中被应用到状态机的最高一条的下标(易失,初始为0,单调递增)
 	nextIndex        []int         // (only Leader,成为Leader后初始化)对于每台服务器,发送的下一条log的索引(初始为Leader的最大索引+1)
 	matchIndex       []int         // (only Leader,成为Leader后初始化)对于每台服务器,已知的已复制到该服务器的最高索引(默认为0,单调递增)
 	termIndex        map[int]int
@@ -384,6 +385,23 @@ func (rf *Raft) ticker() {
 	}
 }
 
+// 类似ticker,apply那些可以commit的logs
+func (rf *Raft) applier() {
+	for rf.killed() == false {
+		rf.mu.Lock()
+		if rf.commitIndex > rf.lastAppliedIndex {
+			for index := rf.lastAppliedIndex + 1; index <= rf.commitIndex; index++ {
+				rf.Logs[index-1].CommandValid = true
+				rf.applyCh <- rf.Logs[index-1]
+			}
+			rf.persist()
+		}
+		rf.lastAppliedIndex = rf.commitIndex
+		rf.mu.Unlock()
+		time.Sleep(ApplierSleepTime)
+	}
+}
+
 // 开始一场选举
 func (rf *Raft) startElection() {
 	rf.mu.Lock()
@@ -409,7 +427,7 @@ func (rf *Raft) startElection() {
 			// 1.赢得了大部分选票,成为Leader
 			fmt.Printf("L[%v] is a Leader now Term:[%v]\n", rf.me, rf.CurrentTerm)
 			rf.role = Leader
-			//rf.VotedFor = -1
+			rf.VotedFor = -1
 			// 初始化Leader需要的内容
 			rf.nextIndex = make([]int, len(rf.peers))
 			rf.matchIndex = make([]int, len(rf.peers))
@@ -541,21 +559,7 @@ func (rf *Raft) checkCommittedLogs() {
 func (rf *Raft) updateCommitIndex(commitIndex int) {
 	if commitIndex > rf.commitIndex {
 		fmt.Printf("s[%v] update commitIndex [%v]->[%v]\n", rf.me, rf.commitIndex, commitIndex)
-		//fmt.Printf("s[%v] logs:[%v]\n", rf.me, rf.Logs)
-		//for index := rf.commitIndex + 1; index <= commitIndex; index++ {
-		//	if rf.Logs[index-1].CommandValid == false {
-		//		rf.Logs[index-1].CommandValid = true
-		//		rf.applyCh <- rf.Logs[index-1]
-		//	}
-		//}
-		for index := 0; index < commitIndex; index++ {
-			if rf.Logs[index].CommandValid == false {
-				rf.Logs[index].CommandValid = true
-				rf.applyCh <- rf.Logs[index]
-			}
-		}
 		rf.commitIndex = commitIndex
-		rf.persist()
 	}
 }
 
@@ -580,8 +584,8 @@ func (rf *Raft) pushLogsToFollower(server int, startTerm int) {
 			pushOk, pushReply := rf.sendAppendEntries(pushLogs, followerNextIndex, server)
 			if pushReply.Success {
 				// 检查推送完成后是否为最新,不为则继续Push,更新Follower的nextIndex,matchIndex
-				//retry = len(rf.Logs) != pushLastIndex
-				retry = false
+				retry = len(rf.Logs) != pushLastIndex
+				//retry = false
 				rf.nextIndex[server] = pushLastIndex + 1
 				rf.matchIndex[server] = pushLastIndex
 				fmt.Printf("L[%v] push log to F[%v] success,Leader LogsLen:[%v] pushLast:[%v] pushLen:[%v]\n", rf.me, server, len(rf.Logs), pushLastIndex, len(pushLogs))
@@ -605,11 +609,9 @@ func (rf *Raft) pushLogsToFollower(server int, startTerm int) {
 					if index, ok := rf.termIndex[pushReply.XTerm]; ok {
 						// Leader有对应Term的Log
 						rf.nextIndex[server] = index
-						fmt.Println("111")
 					} else {
 						// Leader没有对应Term的Log
 						rf.nextIndex[server] = pushReply.XIndex
-						fmt.Println("222")
 					}
 				} else {
 					// Follower的日志太短了
@@ -714,7 +716,7 @@ type AppendEnTriesArgs struct {
 type AppendEntriesReply struct {
 	FollowerTerm int  // Follower的Term,给Leader更新自己的Term
 	Success      bool // 是否推送成功
-	XTerm        int
+	XTerm        int  // 加速同步
 	XIndex       int
 	XLen         int
 }
@@ -736,7 +738,6 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 	rf.heartBeatTimeOut = time.Now().Add(getRandElectionTimeOut())
 	rf.VotedFor = -1
 	rf.role = Follower
-	//if len(args.Logs) > 0 {
 	// Follower接受到的Logs状态设为False
 	for index := 0; index < len(args.Logs); index++ {
 		args.Logs[index].CommandValid = false
@@ -771,7 +772,6 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 		reply.Success = false
 		return
 	}
-	//}
 	rf.persist()
 	if args.LeaderCommit > rf.commitIndex && len(rf.Logs) == args.PrevLogIndex && rf.Logs[len(rf.Logs)-1].CommandTerm == args.PrevLogTerm {
 		rf.updateCommitIndex(min(args.LeaderCommit, len(rf.Logs)))
@@ -812,5 +812,6 @@ func Make(peers []*labrpc.ClientEnd, me int, persister *Persister, applyCh chan 
 	rf.readPersist(persister.ReadRaftState())
 	// start ticker goroutine to start elections
 	go rf.ticker()
+	go rf.applier()
 	return rf
 }
