@@ -67,8 +67,9 @@ const (
 	PushLogsTime           = 3 * time.Millisecond  // Leader推送Log的间隔时间
 	checkCommittedLogsTime = 35 * time.Millisecond // Leader更新CommitIndex的间隔时间
 
-	ElectionTimeOutMin = 400 // 选举超时时间(也用于检查是否需要开始选举) 区间
-	ElectionTimeOutMax = 620
+	ElectionTimeOutMin = 450 // 选举超时时间(也用于检查是否需要开始选举) 区间
+	ElectionTimeOutMax = 600
+	// 450-600
 )
 
 func min(a int, b int) int {
@@ -164,22 +165,22 @@ func (rf *Raft) readPersist(data []byte) {
 	decoder := labgob.NewDecoder(reader)
 	var votedFor, currentTerm int
 	var logs []ApplyMsg
-	//if decoder.Decode(&votedFor) != nil ||
-	//	decoder.Decode(&currentTerm) != nil ||
-	//	decoder.Decode(&logs) != nil {
-	//	fmt.Printf("s[%v] readPersist error\n", rf.me)
-	//} else {
-	//	rf.VotedFor = votedFor
-	//	rf.CurrentTerm = currentTerm
-	//	rf.Logs = logs
-	//}
-	if decoder.Decode(&votedFor) == nil &&
-		decoder.Decode(&currentTerm) == nil &&
-		decoder.Decode(&logs) == nil {
+	if decoder.Decode(&votedFor) != nil ||
+		decoder.Decode(&currentTerm) != nil ||
+		decoder.Decode(&logs) != nil {
+		fmt.Printf("s[%v] readPersist error\n", rf.me)
+	} else {
 		rf.VotedFor = votedFor
 		rf.CurrentTerm = currentTerm
 		rf.Logs = logs
 	}
+	//if decoder.Decode(&votedFor) == nil &&
+	//	decoder.Decode(&currentTerm) == nil &&
+	//	decoder.Decode(&logs) == nil {
+	//	rf.VotedFor = votedFor
+	//	rf.CurrentTerm = currentTerm
+	//	rf.Logs = logs
+	//}
 	fmt.Printf("s[%v] readPersist logs:%v\n", rf.me, len(logs))
 }
 
@@ -250,7 +251,6 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 			// 如果两份日志最后的条目任期号相同,那么日志比较长的那个就更加新
 			reply.VoteGranted = true
 		}
-		// 执行投票
 		if reply.VoteGranted {
 			rf.VotedFor = args.CandidateIndex
 			rf.heartBeatTimeOut = time.Now().Add(getRandElectionTimeOut())
@@ -375,7 +375,7 @@ func (rf *Raft) ticker() {
 		rf.mu.Lock()
 		// 检查是否要开始领导选举,检查超时时间和角色,并且没有投票给别人
 		if rf.isHeartBeatTimeOut() && rf.VotedFor == -1 && rf.role == Follower {
-			//rf.mu.Unlock()
+			rf.mu.Unlock()
 			fmt.Println(rf.me, "start election")
 			rf.startElection()
 		} else {
@@ -387,7 +387,7 @@ func (rf *Raft) ticker() {
 
 // 开始一场选举
 func (rf *Raft) startElection() {
-	//rf.mu.Lock()
+	rf.mu.Lock()
 	// 初始化投票数据
 	rf.VotedFor = rf.me
 	for server := 0; server < len(rf.peers); server++ {
@@ -438,14 +438,14 @@ func (rf *Raft) startElection() {
 		} else if rf.role == Follower {
 			// 2.其他人成为了Leader,转为Follower了
 			rf.VotedFor = -1
-			rf.persist()
+			//rf.persist()
 			rf.mu.Unlock()
 			return
 		} else if electionTimeOut.Before(time.Now()) {
 			// 3.选举超时,重新开始选举
 			rf.VotedFor = -1
+			//rf.persist()
 			rf.role = Follower
-			rf.persist()
 			rf.mu.Unlock()
 			return
 		}
@@ -543,18 +543,18 @@ func (rf *Raft) updateCommitIndex(commitIndex int) {
 	if commitIndex > rf.commitIndex {
 		fmt.Printf("s[%v] update commitIndex [%v]->[%v]\n", rf.me, rf.commitIndex, commitIndex)
 		//fmt.Printf("s[%v] logs:[%v]\n", rf.me, rf.Logs)
-		for index := rf.commitIndex + 1; index <= commitIndex; index++ {
-			if rf.Logs[index-1].CommandValid == false {
-				rf.Logs[index-1].CommandValid = true
-				rf.applyCh <- rf.Logs[index-1]
-			}
-		}
-		//for index := 0; index < commitIndex; index++ {
-		//	if rf.Logs[index].CommandValid == false {
-		//		rf.Logs[index].CommandValid = true
-		//		rf.applyCh <- rf.Logs[index]
+		//for index := rf.commitIndex + 1; index <= commitIndex; index++ {
+		//	if rf.Logs[index-1].CommandValid == false {
+		//		rf.Logs[index-1].CommandValid = true
+		//		rf.applyCh <- rf.Logs[index-1]
 		//	}
 		//}
+		for index := 0; index < commitIndex; index++ {
+			if rf.Logs[index].CommandValid == false {
+				rf.Logs[index].CommandValid = true
+				rf.applyCh <- rf.Logs[index]
+			}
+		}
 		rf.commitIndex = commitIndex
 		rf.persist()
 	}
