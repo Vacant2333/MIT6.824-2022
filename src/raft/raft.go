@@ -60,16 +60,17 @@ const (
 	Candidate = 2
 	Leader    = 3
 
-	TickerSleepTime   = 20 * time.Millisecond  // Ticker 睡眠时间 ms
-	ApplierSleepTime  = 10 * time.Millisecond  // Applier睡眠时间
-	ElectionSleepTime = 10 * time.Millisecond  // 选举睡眠时间
-	HeartBeatSendTime = 105 * time.Millisecond // 心跳包发送时间 ms
+	TickerSleepTime   = 10 * time.Millisecond  // Ticker 睡眠时间 ms
+	ApplierSleepTime  = 6 * time.Millisecond   // Applier睡眠时间
+	ElectionSleepTime = 5 * time.Millisecond   // 选举睡眠时间
+	HeartBeatSendTime = 100 * time.Millisecond // 心跳包发送时间 ms
 
-	PushLogsTime           = 3 * time.Millisecond  // Leader推送Log的间隔时间
-	checkCommittedLogsTime = 10 * time.Millisecond // Leader更新CommitIndex的间隔时间
+	PushLogsTime           = 5 * time.Millisecond  // Leader推送Log的间隔时间
+	checkCommittedLogsTime = 15 * time.Millisecond // Leader更新CommitIndex的间隔时间
 
-	ElectionTimeOutMin = 450 // 选举超时时间(也用于检查是否需要开始选举) 区间
-	ElectionTimeOutMax = 600
+	ElectionTimeOutMin = 500 // 选举超时时间(也用于检查是否需要开始选举) 区间
+	ElectionTimeOutMax = 750
+	// 不改时间了
 )
 
 func min(a int, b int) int {
@@ -443,6 +444,9 @@ func (rf *Raft) startElection() {
 			return
 		} else if electionTimeOut.Before(time.Now()) {
 			// 3.选举超时,重新开始选举
+			//rf.VotedFor = -1
+			//rf.role = Follower
+			//rf.persist()
 			rf.mu.Unlock()
 			rf.startElection()
 			return
@@ -499,7 +503,7 @@ func (rf *Raft) collectVotes() {
 	}
 }
 
-// Leader持续更新自己的已提交logs
+// Leader,检查是否可以更新commitIndex
 func (rf *Raft) checkCommittedLogs() {
 	for rf.killed() == false {
 		rf.mu.Lock()
@@ -806,6 +810,7 @@ func Make(peers []*labrpc.ClientEnd, me int, persister *Persister, applyCh chan 
 	rf.commitIndex = 0
 	rf.lastAppliedIndex = 0
 	// 2B end
+	rf.lastNewEntryIndex = 0
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 	// start ticker goroutine to start elections
