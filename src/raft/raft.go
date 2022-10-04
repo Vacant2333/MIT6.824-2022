@@ -175,7 +175,7 @@ func (rf *Raft) readPersist(data []byte) {
 		rf.CurrentTerm = currentTerm
 		rf.Logs = logs
 	}
-	fmt.Printf("s[%v] readPersist logs:%v\n", rf.me, len(logs))
+	fmt.Printf("s[%v] readPersist logsLen:%v Term:%v\n", rf.me, len(logs), rf.CurrentTerm)
 }
 
 //
@@ -411,10 +411,17 @@ func (rf *Raft) startElection() {
 	// 检查结果
 	for rf.killed() == false {
 		rf.mu.Lock()
+		if rf.role == Follower {
+			// 2.其他人成为了Leader,Candidate转为了Follower
+			fmt.Printf("another is leader now,s[%v] Term:[%v]\n", rf.me, rf.CurrentTerm)
+			rf.mu.Unlock()
+			return
+		}
 		voteCount := rf.getGrantedVotes()
 		if voteCount > len(rf.peers)/2 {
 			// 1.赢得了大部分选票,成为Leader
 			fmt.Printf("L[%v] is a Leader now Term:[%v]\n", rf.me, rf.CurrentTerm)
+			fmt.Println(rf.me, "votes:", rf.getGrantedVotes(), rf.peersVoteGranted)
 			rf.role = Leader
 			// 初始化Leader需要的内容
 			rf.nextIndex = make([]int, len(rf.peers))
@@ -447,8 +454,6 @@ func (rf *Raft) startElection() {
 		} else if electionTimeOut.Before(time.Now()) {
 			// 3.选举超时,重新开始选举
 			fmt.Printf("s[%v] re elect,Term:[%v]\n", rf.me, rf.CurrentTerm)
-			//rf.VotedFor = -1
-			//rf.persist()
 			rf.mu.Unlock()
 			rf.startElection()
 			return
@@ -585,12 +590,6 @@ func (rf *Raft) pushLogsToFollower(server int, startTerm int) {
 			} else if pushOk {
 				// 推送失败但是请求成功,减少nextIndex且重试
 				retry = true
-				//if followerNextIndex != rf.nextIndex[server] {
-				//	// todo:发送前和发送后的nextIndex不匹配
-				//	fmt.Printf("F[%v] status is not match in L[%v]\n", server, rf.me)
-				//	rf.mu.Unlock()
-				//	continue
-				//}
 				old := rf.nextIndex[server]
 				if pushReply.XTerm != -1 {
 					if index, ok := rf.termIndex[pushReply.XTerm]; ok {
@@ -739,7 +738,7 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 		for _, log := range args.Logs {
 			index := log.CommandIndex
 			if index <= len(rf.Logs) {
-				// 存在这条Log
+				// 存在这条Log,如果Term相同则不做处理
 				if rf.Logs[index-1].CommandTerm != log.CommandTerm {
 					rf.Logs = rf.Logs[:index-1]
 					rf.Logs = append(rf.Logs, log)
@@ -775,7 +774,7 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 		reply.Success = false
 		return
 	}
-	fmt.Printf("s[%v] lastNew:%v len:%v commit:%v term:%v\n", rf.me, rf.lastNewEntryIndex, len(rf.Logs), rf.commitIndex, rf.CurrentTerm)
+	//fmt.Printf("s[%v] lastNew:%v len:%v commit:%v term:%v\n", rf.me, rf.lastNewEntryIndex, len(rf.Logs), rf.commitIndex, rf.CurrentTerm)
 	rf.persist()
 	// 更新commitIndex
 	if args.LeaderCommit > rf.commitIndex {
@@ -813,7 +812,9 @@ func Make(peers []*labrpc.ClientEnd, me int, persister *Persister, applyCh chan 
 	rf.commitIndex = 0
 	rf.lastAppliedIndex = 0
 	// 2B end
+	// 2C start
 	rf.lastNewEntryIndex = 0
+	// 2C end
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 	// start ticker goroutine to start elections
