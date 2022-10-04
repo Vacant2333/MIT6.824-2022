@@ -318,7 +318,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		log.CommandIndex = index
 		log.CommandTerm = term
 		rf.Logs = append(rf.Logs, log)
-		//fmt.Printf("L[%v] Leader get a Start request[%v], Index:[%v] Term:[%v]\n", rf.me, command, index, term)
+		fmt.Printf("L[%v] Leader get a Start request[%v], Index:[%v] Term:[%v]\n", rf.me, command, index, term)
 		rf.persist()
 		// (Leader)记录每个Term的第一条Log的Index
 		if _, ok := rf.termIndex[term]; ok == false {
@@ -357,7 +357,8 @@ func (rf *Raft) ticker() {
 	for rf.killed() == false {
 		rf.mu.Lock()
 		// 检查是否要开始领导选举,检查超时时间和角色,并且没有投票给别人
-		if rf.isHeartBeatTimeOut() && rf.VotedFor == -1 && rf.role == Follower {
+		//fmt.Printf("s[%v] ticker vote:%v role:%v term:%v\n", rf.me, rf.VotedFor, rf.role, rf.CurrentTerm)
+		if rf.isHeartBeatTimeOut() && (rf.VotedFor == -1 || rf.VotedFor == rf.me) && rf.role == Follower {
 			rf.mu.Unlock()
 			fmt.Println(rf.me, "start election")
 			rf.startElection()
@@ -440,12 +441,13 @@ func (rf *Raft) startElection() {
 			return
 		} else if rf.role == Follower {
 			// 2.其他人成为了Leader,Candidate转为了Follower
+			fmt.Printf("another is leader now,s[%v] Term:[%v]\n", rf.me, rf.CurrentTerm)
 			rf.mu.Unlock()
 			return
 		} else if electionTimeOut.Before(time.Now()) {
 			// 3.选举超时,重新开始选举
+			fmt.Printf("s[%v] re elect,Term:[%v]\n", rf.me, rf.CurrentTerm)
 			//rf.VotedFor = -1
-			//rf.role = Follower
 			//rf.persist()
 			rf.mu.Unlock()
 			rf.startElection()
@@ -583,12 +585,12 @@ func (rf *Raft) pushLogsToFollower(server int, startTerm int) {
 			} else if pushOk {
 				// 推送失败但是请求成功,减少nextIndex且重试
 				retry = true
-				if followerNextIndex != rf.nextIndex[server] {
-					// 发送前和发送后的nextIndex不匹配
-					fmt.Printf("F[%v] status is not match in L[%v]\n", server, rf.me)
-					rf.mu.Unlock()
-					continue
-				}
+				//if followerNextIndex != rf.nextIndex[server] {
+				//	// todo:发送前和发送后的nextIndex不匹配
+				//	fmt.Printf("F[%v] status is not match in L[%v]\n", server, rf.me)
+				//	rf.mu.Unlock()
+				//	continue
+				//}
 				old := rf.nextIndex[server]
 				if pushReply.XTerm != -1 {
 					if index, ok := rf.termIndex[pushReply.XTerm]; ok {
@@ -773,6 +775,7 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 		reply.Success = false
 		return
 	}
+	fmt.Printf("s[%v] lastNew:%v len:%v commit:%v term:%v\n", rf.me, rf.lastNewEntryIndex, len(rf.Logs), rf.commitIndex, rf.CurrentTerm)
 	rf.persist()
 	// 更新commitIndex
 	if args.LeaderCommit > rf.commitIndex {
