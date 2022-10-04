@@ -367,23 +367,23 @@ func (rf *Raft) ticker() {
 	}
 }
 
-// 类似ticker,apply那些可以commit的logs
+// apply那些commit的logs
 func (rf *Raft) applier() {
 	for rf.killed() == false {
 		rf.mu.Lock()
 		if rf.commitIndex > rf.lastAppliedIndex {
 			for index := rf.lastAppliedIndex + 1; index <= rf.commitIndex; index++ {
-				if index > len(rf.Logs) {
-					// todo: lastAppliedIndex不应该超过的,但是不知道为啥
-					break
-				}
+				//if index > len(rf.Logs) {
+				//	// todo: lastAppliedIndex不应该超过的,但是不知道为啥
+				//	break
+				//}
 				rf.Logs[index-1].CommandValid = true
 				rf.applyCh <- rf.Logs[index-1]
-				rf.lastAppliedIndex++
+				//rf.lastAppliedIndex++
 			}
 			rf.persist()
 		}
-		//rf.lastAppliedIndex = rf.commitIndex
+		rf.lastAppliedIndex = rf.commitIndex
 		rf.mu.Unlock()
 		time.Sleep(ApplierSleepTime)
 	}
