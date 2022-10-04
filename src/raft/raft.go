@@ -60,16 +60,16 @@ const (
 	Candidate = 2
 	Leader    = 3
 
-	TickerSleepTime   = 10 * time.Millisecond  // Ticker 睡眠时间 ms
+	TickerSleepTime   = 20 * time.Millisecond  // Ticker 睡眠时间 ms
 	ApplierSleepTime  = 10 * time.Millisecond  // Applier睡眠时间
-	ElectionSleepTime = 6 * time.Millisecond   // 选举睡眠时间
-	HeartBeatSendTime = 100 * time.Millisecond // 心跳包发送时间 ms
+	ElectionSleepTime = 10 * time.Millisecond  // 选举睡眠时间
+	HeartBeatSendTime = 105 * time.Millisecond // 心跳包发送时间 ms
 
-	PushLogsTime           = 2 * time.Millisecond  // Leader推送Log的间隔时间
+	PushLogsTime           = 3 * time.Millisecond  // Leader推送Log的间隔时间
 	checkCommittedLogsTime = 10 * time.Millisecond // Leader更新CommitIndex的间隔时间
 
-	ElectionTimeOutMin = 275 // 选举超时时间(也用于检查是否需要开始选举) 区间
-	ElectionTimeOutMax = 500
+	ElectionTimeOutMin = 450 // 选举超时时间(也用于检查是否需要开始选举) 区间
+	ElectionTimeOutMax = 600
 )
 
 func min(a int, b int) int {
@@ -164,8 +164,7 @@ func (rf *Raft) readPersist(data []byte) {
 	if data == nil || len(data) < 1 { // bootstrap without any state?
 		return
 	}
-	reader := bytes.NewBuffer(data)
-	decoder := labgob.NewDecoder(reader)
+	decoder := labgob.NewDecoder(bytes.NewBuffer(data))
 	var votedFor, currentTerm int
 	var logs []ApplyMsg
 	if decoder.Decode(&votedFor) == nil &&
@@ -344,17 +343,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 func (rf *Raft) Kill() {
 	atomic.StoreInt32(&rf.dead, 1)
 	// Your code here, if desired.
-	//rf.mu.Lock()
-	//fmt.Println("-----dead-----start")
-	//fmt.Printf("s[%v] dead! role:[%v], Term:[%v]"+
-	//	"\ncommitIndex:[%v] logsLen[%v]\nlogs:[%v]\n", rf.me, rf.role,
-	//	rf.CurrentTerm, rf.commitIndex, len(rf.Logs), rf.Logs)
-	//if rf.role == Leader {
-	//	fmt.Println("nextIndex: ", rf.nextIndex)
-	//	fmt.Println("matchIndex:", rf.matchIndex)
-	//}
-	//fmt.Println("-----dead-----end--")
-	//rf.mu.Unlock()
 }
 
 func (rf *Raft) killed() bool {
@@ -406,15 +394,15 @@ func (rf *Raft) startElection() {
 	rf.mu.Lock()
 	// 初始化投票数据
 	rf.VotedFor = rf.me
+	rf.CurrentTerm += 1
+	rf.persist()
 	for server := 0; server < len(rf.peers); server++ {
 		// 初始化为只得到来自自己的选票
 		rf.peersVoteGranted[server] = server == rf.me
 	}
-	rf.CurrentTerm += 1
 	rf.role = Candidate
 	// 选举超时时间
 	electionTimeOut := time.Now().Add(getRandElectionTimeOut())
-	rf.persist()
 	rf.mu.Unlock()
 	// 并行收集选票
 	go rf.collectVotes()
@@ -426,7 +414,6 @@ func (rf *Raft) startElection() {
 			// 1.赢得了大部分选票,成为Leader
 			fmt.Printf("L[%v] is a Leader now Term:[%v]\n", rf.me, rf.CurrentTerm)
 			rf.role = Leader
-			//rf.VotedFor = -1
 			// 初始化Leader需要的内容
 			rf.nextIndex = make([]int, len(rf.peers))
 			rf.matchIndex = make([]int, len(rf.peers))
@@ -445,24 +432,19 @@ func (rf *Raft) startElection() {
 					rf.termIndex[rf.Logs[i].CommandTerm] = i + 1
 				}
 			}
-			rf.persist()
 			rf.mu.Unlock()
 			// 持续发送心跳包
 			go rf.sendHeartBeatsToAll()
 			go rf.checkCommittedLogs()
 			return
 		} else if rf.role == Follower {
-			// 2.其他人成为了Leader,转为Follower了
-			rf.VotedFor = -1
-			rf.persist()
+			// 2.其他人成为了Leader,Candidate转为了Follower
 			rf.mu.Unlock()
 			return
 		} else if electionTimeOut.Before(time.Now()) {
 			// 3.选举超时,重新开始选举
-			rf.VotedFor = -1
-			rf.persist()
-			rf.role = Follower
 			rf.mu.Unlock()
+			rf.startElection()
 			return
 		}
 		rf.mu.Unlock()
@@ -743,13 +725,11 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 		// 如果是第一条Log不校验
 		rf.Logs = args.Logs
 		reply.Success = true
-		//if len(args.Logs) > 0 && args.Logs[len(args.Logs)-1].CommandIndex > rf.lastNewEntryIndex {
 		if len(args.Logs) > 0 && args.Logs[len(args.Logs)-1].CommandIndex >= rf.commitIndex {
 			rf.lastNewEntryIndex = args.Logs[len(args.Logs)-1].CommandIndex
 		}
 	} else if args.PrevLogIndex <= len(rf.Logs) && rf.Logs[args.PrevLogIndex-1].CommandTerm == args.PrevLogTerm {
 		// 校验正常,逐条追加,index为在Follower的Logs中的下一个Log的Index
-		//index := args.PrevLogIndex + 1
 		for _, log := range args.Logs {
 			index := log.CommandIndex
 			if index <= len(rf.Logs) {
@@ -762,10 +742,8 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 				// 不存在,直接追加
 				rf.Logs = append(rf.Logs, log)
 			}
-			//index++
 		}
 		reply.Success = true
-		//if len(args.Logs) > 0 && args.Logs[len(args.Logs)-1].CommandIndex > rf.lastNewEntryIndex {
 		if len(args.Logs) > 0 && args.Logs[len(args.Logs)-1].CommandIndex >= rf.commitIndex {
 			rf.lastNewEntryIndex = args.Logs[len(args.Logs)-1].CommandIndex
 		}
