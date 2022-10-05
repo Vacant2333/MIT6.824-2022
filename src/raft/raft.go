@@ -458,9 +458,6 @@ func (rf *Raft) startElection() {
 		rf.mu.Unlock()
 		time.Sleep(ElectionSleepTime)
 	}
-	rf.role = Follower
-	rf.VotedFor = -1
-	rf.persist()
 }
 
 // 获得当前已获得的选票数量,Lock的时候使用
