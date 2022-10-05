@@ -128,6 +128,7 @@ type Raft struct {
 	// 2C start
 	lastNewEntryIndex  int // (for Follower)最后一个新Entre的Index,用于更新commitIndex
 	lastNewEntryLeader int
+	lastVoteTerm       int
 	// 2C end
 }
 
@@ -248,7 +249,9 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 			// 如果两份日志最后的条目任期号相同,那么日志比较长的那个就更加新
 			reply.VoteGranted = true
 		}
-		if reply.VoteGranted {
+		if reply.VoteGranted && rf.lastVoteTerm != rf.CurrentTerm {
+			fmt.Printf("s[%v] vote to s[%v] Term:%v\n", rf.me, args.CandidateIndex, rf.CurrentTerm)
+			rf.lastVoteTerm = rf.CurrentTerm
 			rf.VotedFor = args.CandidateIndex
 			rf.heartBeatTimeOut = time.Now().Add(getRandElectionTimeOut())
 			rf.persist()
@@ -325,7 +328,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		rf.Logs = append(rf.Logs, log)
 		fmt.Printf("L[%v] Leader get a Start request[%v], Index:[%v] Term:[%v]\n", rf.me, command, index, term)
 		rf.persist()
-		fmt.Printf("me:%v match:%v next:%v logslen:%v\n", rf.me, rf.matchIndex, rf.nextIndex, len(rf.Logs))
+		//fmt.Printf("me:%v match:%v next:%v logslen:%v\n", rf.me, rf.matchIndex, rf.nextIndex, len(rf.Logs))
 		// (Leader)记录每个Term的第一条Log的Index
 		if _, ok := rf.termIndex[term]; ok == false {
 			rf.termIndex[term] = index
@@ -363,6 +366,7 @@ func (rf *Raft) ticker() {
 	for rf.killed() == false {
 		rf.mu.Lock()
 		// 检查是否要开始领导选举,检查超时时间和角色,并且没有投票给别人
+		//fmt.Printf("s[%v] ticker vote:%v role:%v term:%v\n", rf.me, rf.VotedFor, rf.role, rf.CurrentTerm)
 		if rf.isHeartBeatTimeOut() && rf.VotedFor == -1 && rf.role == Follower {
 			rf.mu.Unlock()
 			fmt.Println(rf.me, "start election")
@@ -454,6 +458,7 @@ func (rf *Raft) startElection() {
 		rf.mu.Unlock()
 		time.Sleep(ElectionSleepTime)
 	}
+	rf.role = Follower
 	rf.VotedFor = -1
 	rf.persist()
 }
@@ -818,6 +823,7 @@ func Make(peers []*labrpc.ClientEnd, me int, persister *Persister, applyCh chan 
 	// 2B end
 	// 2C start
 	//rf.lastNewEntryIndex = 0
+	rf.lastVoteTerm = -1
 	// 2C end
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
