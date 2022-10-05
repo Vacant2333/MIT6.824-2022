@@ -126,9 +126,7 @@ type Raft struct {
 	termIndex        map[int]int   // (for Leader,成为Leader后初始化)Logs中每个Term的第一条Log的Index
 	// 2B end
 	// 2C start
-	lastNewEntryIndex  int // (for Follower)最后一个新Entre的Index,用于更新commitIndex
-	lastNewEntryLeader int
-	lastVoteTerm       int
+	lastNewEntryIndex int // (for Follower)最后一个新Entre的Index,用于更新commitIndex
 	// 2C end
 }
 
@@ -249,9 +247,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 			// 如果两份日志最后的条目任期号相同,那么日志比较长的那个就更加新
 			reply.VoteGranted = true
 		}
-		if reply.VoteGranted && rf.lastVoteTerm != rf.CurrentTerm {
-			fmt.Printf("s[%v] vote to s[%v] Term:%v\n", rf.me, args.CandidateIndex, rf.CurrentTerm)
-			rf.lastVoteTerm = rf.CurrentTerm
+		if reply.VoteGranted {
 			rf.VotedFor = args.CandidateIndex
 			rf.heartBeatTimeOut = time.Now().Add(getRandElectionTimeOut())
 			rf.persist()
@@ -458,6 +454,8 @@ func (rf *Raft) startElection() {
 		rf.mu.Unlock()
 		time.Sleep(ElectionSleepTime)
 	}
+	rf.VotedFor = -1
+	rf.persist()
 }
 
 // 获得当前已获得的选票数量,Lock的时候使用
@@ -518,8 +516,8 @@ func (rf *Raft) checkCommittedLogs() {
 		// 如果存在一个满足 N > commitIndex 的 N，并且大多数的 matchIndex[i] ≥ N 成立，并且
 		// log[N].term == currentTerm 成立，那么令 commitIndex 等于这个 N （5.3 和 5.4 节）
 		match := make([]int, len(rf.peers))
-		rf.matchIndex[rf.me] = len(rf.Logs)
 		copy(match, rf.matchIndex)
+		match[rf.me] = len(rf.Logs)
 		sort.Ints(match)
 		last := len(rf.Logs)
 		for i := len(match) - 1; i >= 0; i-- {
@@ -537,7 +535,6 @@ func (rf *Raft) checkCommittedLogs() {
 		// Leader只能提交自己任期的Log,也只能通过这种方式顺带提交之前未提交的Log
 		if last > rf.commitIndex && rf.Logs[last-1].CommandTerm == rf.CurrentTerm {
 			fmt.Printf("L[%v] update commitIndex to [%v]\n", rf.me, last)
-			fmt.Printf("L[%v] match:%v last:%v\n", rf.me, rf.matchIndex, last)
 			rf.updateCommitIndex(last)
 		}
 		rf.mu.Unlock()
@@ -545,7 +542,7 @@ func (rf *Raft) checkCommittedLogs() {
 	}
 }
 
-// 更新自己的commitIndex,要Lock
+// 更新自己的commitIndex,用之前先检查,并且要Lock
 func (rf *Raft) updateCommitIndex(commitIndex int) {
 	if commitIndex > rf.commitIndex {
 		fmt.Printf("s[%v] update commitIndex [%v]->[%v]\n", rf.me, rf.commitIndex, commitIndex)
@@ -591,7 +588,6 @@ func (rf *Raft) pushLogsToFollower(server int, startTerm int) {
 			} else {
 				// 校验失败但是请求成功,减少nextIndex且重试
 				retry = true
-				rf.nextIndex[server]--
 				old := rf.nextIndex[server]
 				if pushReply.ConflictTerm != -1 {
 					if index, ok := rf.termIndex[pushReply.ConflictTerm]; ok {
@@ -737,6 +733,9 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 		// 如果是第一条Log不校验
 		rf.Logs = args.Logs
 		reply.Success = true
+		if len(args.Logs) > 0 && args.Logs[len(args.Logs)-1].CommandIndex >= rf.commitIndex {
+			rf.lastNewEntryIndex = args.Logs[len(args.Logs)-1].CommandIndex
+		}
 	} else if args.PrevLogIndex <= len(rf.Logs) && rf.Logs[args.PrevLogIndex-1].CommandTerm == args.PrevLogTerm {
 		// 校验正常,逐条追加,index为在Follower的Logs中的下一个Log的Index
 		for _, log := range args.Logs {
@@ -753,6 +752,9 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 			}
 		}
 		reply.Success = true
+		if len(args.Logs) > 0 && args.Logs[len(args.Logs)-1].CommandIndex >= rf.commitIndex {
+			rf.lastNewEntryIndex = args.Logs[len(args.Logs)-1].CommandIndex
+		}
 	} else if args.PrevLogIndex <= len(rf.Logs) && rf.Logs[args.PrevLogIndex-1].CommandTerm != args.PrevLogTerm {
 		// 发生冲突,索引相同任期不同,删除从PrevLogIndex开始之后的所有Log
 		reply.ConflictTerm = rf.Logs[args.PrevLogIndex-1].CommandTerm
@@ -776,13 +778,6 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 	//fmt.Printf("s[%v] lastNew:%v len:%v commit:%v term:%v\n", rf.me, rf.lastNewEntryIndex, len(rf.Logs), rf.commitIndex, rf.CurrentTerm)
 	rf.persist()
 	// 更新commitIndex
-	if rf.lastNewEntryLeader != args.LeaderIndex {
-		rf.lastNewEntryLeader = args.LeaderIndex
-		rf.lastNewEntryIndex = 0
-	}
-	if len(args.Logs) > 0 && args.Logs[len(args.Logs)-1].CommandIndex >= rf.commitIndex {
-		rf.lastNewEntryIndex = args.Logs[len(args.Logs)-1].CommandIndex
-	}
 	if args.LeaderCommit > rf.commitIndex {
 		rf.updateCommitIndex(min(args.LeaderCommit, rf.lastNewEntryIndex))
 	}
@@ -820,7 +815,6 @@ func Make(peers []*labrpc.ClientEnd, me int, persister *Persister, applyCh chan 
 	// 2B end
 	// 2C start
 	//rf.lastNewEntryIndex = 0
-	rf.lastVoteTerm = -1
 	// 2C end
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
