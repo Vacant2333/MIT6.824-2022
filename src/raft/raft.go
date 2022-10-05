@@ -126,7 +126,8 @@ type Raft struct {
 	termIndex        map[int]int   // (for Leader,成为Leader后初始化)Logs中每个Term的第一条Log的Index
 	// 2B end
 	// 2C start
-	lastNewEntryIndex int // (for Follower)最后一个新Entre的Index,用于更新commitIndex
+	lastNewEntryIndex  int // (for Follower)最后一个新Entre的Index,用于更新commitIndex
+	lastNewEntryLeader int
 	// 2C end
 }
 
@@ -324,6 +325,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		rf.Logs = append(rf.Logs, log)
 		fmt.Printf("L[%v] Leader get a Start request[%v], Index:[%v] Term:[%v]\n", rf.me, command, index, term)
 		rf.persist()
+		fmt.Printf("me:%v match:%v next:%v logslen:%v\n", rf.me, rf.matchIndex, rf.nextIndex, len(rf.Logs))
 		// (Leader)记录每个Term的第一条Log的Index
 		if _, ok := rf.termIndex[term]; ok == false {
 			rf.termIndex[term] = index
@@ -514,8 +516,8 @@ func (rf *Raft) checkCommittedLogs() {
 		// 如果存在一个满足 N > commitIndex 的 N，并且大多数的 matchIndex[i] ≥ N 成立，并且
 		// log[N].term == currentTerm 成立，那么令 commitIndex 等于这个 N （5.3 和 5.4 节）
 		match := make([]int, len(rf.peers))
+		rf.matchIndex[rf.me] = len(rf.Logs)
 		copy(match, rf.matchIndex)
-		match[rf.me] = len(rf.Logs)
 		sort.Ints(match)
 		last := len(rf.Logs)
 		for i := len(match) - 1; i >= 0; i-- {
@@ -533,6 +535,7 @@ func (rf *Raft) checkCommittedLogs() {
 		// Leader只能提交自己任期的Log,也只能通过这种方式顺带提交之前未提交的Log
 		if last > rf.commitIndex && rf.Logs[last-1].CommandTerm == rf.CurrentTerm {
 			fmt.Printf("L[%v] update commitIndex to [%v]\n", rf.me, last)
+			fmt.Printf("L[%v] match:%v last:%v\n", rf.me, rf.matchIndex, last)
 			rf.updateCommitIndex(last)
 		}
 		rf.mu.Unlock()
@@ -540,7 +543,7 @@ func (rf *Raft) checkCommittedLogs() {
 	}
 }
 
-// 更新自己的commitIndex,用之前先检查,并且要Lock
+// 更新自己的commitIndex,要Lock
 func (rf *Raft) updateCommitIndex(commitIndex int) {
 	if commitIndex > rf.commitIndex {
 		fmt.Printf("s[%v] update commitIndex [%v]->[%v]\n", rf.me, rf.commitIndex, commitIndex)
@@ -586,6 +589,7 @@ func (rf *Raft) pushLogsToFollower(server int, startTerm int) {
 			} else {
 				// 校验失败但是请求成功,减少nextIndex且重试
 				retry = true
+				rf.nextIndex[server]--
 				old := rf.nextIndex[server]
 				if pushReply.ConflictTerm != -1 {
 					if index, ok := rf.termIndex[pushReply.ConflictTerm]; ok {
@@ -602,7 +606,7 @@ func (rf *Raft) pushLogsToFollower(server int, startTerm int) {
 					}
 				} else {
 					// Follower的日志太短了
-					rf.nextIndex[server] = pushReply.ConflictIndex
+					rf.nextIndex[server] = pushReply.ConflictIndex + 1
 				}
 				fmt.Printf("s[%v] nextIndex:[%v]->[%v]\n", server, old, rf.nextIndex[server])
 			}
@@ -630,6 +634,7 @@ func (rf *Raft) sendAppendEntries(logs []ApplyMsg, nextIndex int, server int) (b
 	rf.mu.Unlock()
 	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
 	rf.mu.Lock()
+	// 检查Leader状态是否改变,改变的话此条RPC作废
 	if args.LeaderTerm != rf.CurrentTerm || rf.nextIndex[server] != nextIndex || rf.role != Leader {
 		ok = false
 	}
@@ -730,9 +735,6 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 		// 如果是第一条Log不校验
 		rf.Logs = args.Logs
 		reply.Success = true
-		if len(args.Logs) > 0 && args.Logs[len(args.Logs)-1].CommandIndex >= rf.commitIndex {
-			rf.lastNewEntryIndex = args.Logs[len(args.Logs)-1].CommandIndex
-		}
 	} else if args.PrevLogIndex <= len(rf.Logs) && rf.Logs[args.PrevLogIndex-1].CommandTerm == args.PrevLogTerm {
 		// 校验正常,逐条追加,index为在Follower的Logs中的下一个Log的Index
 		for _, log := range args.Logs {
@@ -749,9 +751,6 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 			}
 		}
 		reply.Success = true
-		if len(args.Logs) > 0 && args.Logs[len(args.Logs)-1].CommandIndex >= rf.commitIndex {
-			rf.lastNewEntryIndex = args.Logs[len(args.Logs)-1].CommandIndex
-		}
 	} else if args.PrevLogIndex <= len(rf.Logs) && rf.Logs[args.PrevLogIndex-1].CommandTerm != args.PrevLogTerm {
 		// 发生冲突,索引相同任期不同,删除从PrevLogIndex开始之后的所有Log
 		reply.ConflictTerm = rf.Logs[args.PrevLogIndex-1].CommandTerm
@@ -775,6 +774,13 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 	//fmt.Printf("s[%v] lastNew:%v len:%v commit:%v term:%v\n", rf.me, rf.lastNewEntryIndex, len(rf.Logs), rf.commitIndex, rf.CurrentTerm)
 	rf.persist()
 	// 更新commitIndex
+	if rf.lastNewEntryLeader != args.LeaderIndex {
+		rf.lastNewEntryLeader = args.LeaderIndex
+		rf.lastNewEntryIndex = 0
+	}
+	if len(args.Logs) > 0 && args.Logs[len(args.Logs)-1].CommandIndex >= rf.commitIndex {
+		rf.lastNewEntryIndex = args.Logs[len(args.Logs)-1].CommandIndex
+	}
 	if args.LeaderCommit > rf.commitIndex {
 		rf.updateCommitIndex(min(args.LeaderCommit, rf.lastNewEntryIndex))
 	}
@@ -811,7 +817,7 @@ func Make(peers []*labrpc.ClientEnd, me int, persister *Persister, applyCh chan 
 	rf.lastAppliedIndex = 0
 	// 2B end
 	// 2C start
-	rf.lastNewEntryIndex = 0
+	//rf.lastNewEntryIndex = 0
 	// 2C end
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
