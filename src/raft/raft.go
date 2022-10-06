@@ -68,11 +68,11 @@ const (
 	PushLogsTime           = 5 * time.Millisecond  // Leader推送Log的间隔时间
 	checkCommittedLogsTime = 15 * time.Millisecond // Leader更新CommitIndex的间隔时间
 
-	ElectionTimeOutMin = 400 // 选举超时时间(也用于检查是否需要开始选举) 区间
-	ElectionTimeOutMax = 550
+	//ElectionTimeOutMin = 400 // 选举超时时间(也用于检查是否需要开始选举) 区间
+	//ElectionTimeOutMax = 550
 
-	//ElectionTimeOutMin = 300 // 选举超时时间(也用于检查是否需要开始选举) 区间
-	//ElectionTimeOutMax = 425 // 还可以?
+	ElectionTimeOutMin = 300 // 选举超时时间(也用于检查是否需要开始选举) 区间
+	ElectionTimeOutMax = 425 // 还可以?
 
 	//ElectionTimeOutMin = 500 // 选举超时时间(也用于检查是否需要开始选举) 区间
 	//ElectionTimeOutMax = 750
@@ -367,7 +367,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 			rf.termIndex[term] = index
 		}
 	} else {
-		fmt.Printf("s[%v] start role:%v voteFor:%v Term:%v logs:%v apply:%v\n", rf.me, rf.role, rf.VotedFor, rf.CurrentTerm, len(rf.Logs), rf.lastAppliedIndex)
+		fmt.Printf("s[%v] start role:%v voteFor:%v voteTerm:%v Term:%v logs:%v apply:%v\n", rf.me, rf.role, rf.VotedFor, rf.lastVoteTerm, rf.CurrentTerm, len(rf.Logs), rf.lastAppliedIndex)
 	}
 
 	rf.mu.Unlock()
@@ -407,7 +407,7 @@ func (rf *Raft) ticker() {
 			fmt.Println(rf.me, "start election")
 			rf.startElection()
 		} else {
-			fmt.Printf("s[%v] ticker votedFor:%v voteTerm:%v term:%v\n", rf.me, rf.VotedFor, rf.lastVoteTerm, rf.CurrentTerm)
+			//fmt.Printf("s[%v] ticker votedFor:%v voteTerm:%v term:%v\n", rf.me, rf.VotedFor, rf.lastVoteTerm, rf.CurrentTerm)
 			rf.mu.Unlock()
 		}
 		time.Sleep(TickerSleepTime)
@@ -454,7 +454,7 @@ func (rf *Raft) startElection() {
 		voteCount := rf.getGrantedVotes()
 		if rf.role == Follower {
 			// 2.其他人成为了Leader,Candidate转为了Follower
-			fmt.Printf("another is leader now,s[%v] Term:[%v]\n", rf.me, rf.CurrentTerm)
+			fmt.Printf("C[%v] another is leader now Term:[%v]\n", rf.me, rf.CurrentTerm)
 			rf.mu.Unlock()
 			return
 		} else if voteCount > len(rf.peers)/2 {
@@ -479,6 +479,9 @@ func (rf *Raft) startElection() {
 					rf.termIndex[rf.Logs[i].CommandTerm] = i + 1
 				}
 			}
+			// 和Follower接收到Heart后清空VotedFor同理,意味着投票阶段结束,如果有问题自己就可以开始再一次选举
+			rf.VotedFor = -1
+			rf.persist()
 			rf.mu.Unlock()
 			// 持续发送心跳包
 			go rf.sendHeartBeatsToAll()
