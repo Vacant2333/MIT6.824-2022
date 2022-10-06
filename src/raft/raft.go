@@ -393,11 +393,12 @@ func (rf *Raft) ticker() {
 	for rf.killed() == false {
 		rf.mu.Lock()
 		// 检查是否要开始领导选举,检查超时时间和角色,并且没有投票给别人或是投了票后收到了某个Leader的Heart,收到后会清空VotedFor
-		if rf.isHeartBeatTimeOut() && (rf.hasVoteToSomeOne() == false || rf.hasVoteToSomeOne() && rf.VotedFor == -1) && rf.role == Follower {
+		if rf.isHeartBeatTimeOut() && rf.role == Follower {
 			rf.mu.Unlock()
 			fmt.Println(rf.me, "start election")
 			rf.startElection()
 		} else {
+			fmt.Printf("s[%v] role:%v term:%v vote:%v voteTerm:%v\n", rf.me, rf.role, rf.CurrentTerm, rf.VotedFor, rf.lastVoteTerm)
 			rf.mu.Unlock()
 		}
 		time.Sleep(TickerSleepTime)
