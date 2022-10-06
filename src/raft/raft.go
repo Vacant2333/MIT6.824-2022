@@ -99,6 +99,28 @@ func (rf *Raft) isHeartBeatTimeOut() bool {
 	return rf.heartBeatTimeOut.Before(time.Now())
 }
 
+// 检查当前任期是否有投票,要Lock
+func (rf *Raft) hasVoteToSomeOne() bool {
+	// todo: <=
+	return rf.CurrentTerm == rf.lastVoteTerm
+}
+
+// 获得当前任期投给的Server
+func (rf *Raft) getVoteTo() int {
+	if rf.hasVoteToSomeOne() {
+		return rf.VotedFor
+	}
+	return -1
+}
+
+// 投票给某个Candidate
+func (rf *Raft) voteTo(server int) {
+	rf.VotedFor = server
+	rf.lastVoteTerm = rf.CurrentTerm
+	rf.persist()
+	fmt.Printf("s[%v] vote to s[%v] Term:[%v]\n", rf.me, server, rf.CurrentTerm)
+}
+
 // Raft
 // A Go object implementing a single Raft peer.
 //
@@ -127,6 +149,7 @@ type Raft struct {
 	// 2B end
 	// 2C start
 	lastNewEntryIndex int // (for Follower)最后一个新Entre的Index,用于更新commitIndex
+	lastVoteTerm      int
 	// 2C end
 }
 
@@ -154,6 +177,7 @@ func (rf *Raft) persist() {
 	writer := new(bytes.Buffer)
 	encoder := labgob.NewEncoder(writer)
 	encoder.Encode(rf.VotedFor)
+	encoder.Encode(rf.lastVoteTerm)
 	encoder.Encode(rf.CurrentTerm)
 	encoder.Encode(rf.Logs)
 	data := writer.Bytes()
@@ -168,12 +192,14 @@ func (rf *Raft) readPersist(data []byte) {
 		return
 	}
 	decoder := labgob.NewDecoder(bytes.NewBuffer(data))
-	var votedFor, currentTerm int
+	var votedFor, currentTerm, lastVoteTerm int
 	var logs []ApplyMsg
 	if decoder.Decode(&votedFor) == nil &&
+		decoder.Decode(&lastVoteTerm) == nil &&
 		decoder.Decode(&currentTerm) == nil &&
 		decoder.Decode(&logs) == nil {
 		rf.VotedFor = votedFor
+		rf.lastVoteTerm = lastVoteTerm
 		rf.CurrentTerm = currentTerm
 		rf.Logs = logs
 	}
@@ -235,7 +261,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	}
 	reply.FollowerTerm = rf.CurrentTerm
 	// 是否投票给他
-	if args.CandidateTerm >= rf.CurrentTerm && (rf.VotedFor == -1 || rf.VotedFor == args.CandidateIndex) {
+	if args.CandidateTerm >= rf.CurrentTerm && (rf.hasVoteToSomeOne() == false || rf.getVoteTo() == args.CandidateIndex) {
 		// Candidate的Log至少和自己一样新,才能给他投票
 		if len(rf.Logs) == 0 {
 			// 自己没有Log
@@ -248,10 +274,10 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 			reply.VoteGranted = true
 		}
 		if reply.VoteGranted {
-			fmt.Printf("s[%v] vote to s[%v] Term:[%v]\n", rf.me, args.CandidateIndex, rf.CurrentTerm)
-			rf.VotedFor = args.CandidateIndex
+			//rf.VotedFor = args.CandidateIndex
 			rf.heartBeatTimeOut = time.Now().Add(getRandElectionTimeOut())
-			rf.persist()
+			//rf.persist()
+			rf.voteTo(args.CandidateIndex)
 		}
 	}
 }
@@ -366,12 +392,12 @@ func (rf *Raft) ticker() {
 	for rf.killed() == false {
 		rf.mu.Lock()
 		// 检查是否要开始领导选举,检查超时时间和角色,并且没有投票给别人
-		//fmt.Printf("s[%v] ticker vote:%v role:%v term:%v\n", rf.me, rf.VotedFor, rf.role, rf.CurrentTerm)
-		if rf.isHeartBeatTimeOut() && rf.VotedFor == -1 && rf.role == Follower {
+		if rf.isHeartBeatTimeOut() && (rf.hasVoteToSomeOne() == false || rf.hasVoteToSomeOne() && rf.VotedFor == -1) && rf.role == Follower {
 			rf.mu.Unlock()
 			fmt.Println(rf.me, "start election")
 			rf.startElection()
 		} else {
+			fmt.Printf("s[%v] ticker votedFor:%v voteTerm:%v term:%v\n", rf.me, rf.VotedFor, rf.lastVoteTerm, rf.CurrentTerm)
 			rf.mu.Unlock()
 		}
 		time.Sleep(TickerSleepTime)
@@ -402,9 +428,10 @@ func (rf *Raft) startElection() {
 	rf.mu.Lock()
 	// 初始化投票数据
 	rf.CurrentTerm += 1
+	rf.voteTo(rf.me)
 	rf.heartBeatTimeOut = time.Now().Add(getRandElectionTimeOut())
-	rf.persist()
-	rf.VotedFor = rf.me
+	//rf.persist()
+	//rf.VotedFor = rf.me
 	// todo:persist votedFor
 	// 选举开始时只有来自自己的选票
 	for server := 0; server < len(rf.peers); server++ {
@@ -508,22 +535,6 @@ func (rf *Raft) collectVotes() {
 			go askVote(server, askVoteArgs)
 		}
 	}
-	// todo:test持续收集选票
-	//for {
-	//	rf.mu.Lock()
-	//	if rf.role != Candidate || rf.killed() || rf.CurrentTerm != st {
-	//		rf.mu.Unlock()
-	//		break
-	//	} else {
-	//		rf.mu.Unlock()
-	//	}
-	//	for server := 0; server < len(rf.peers); server++ {
-	//		if server != rf.me {
-	//			go askVote(server, askVoteArgs)
-	//		}
-	//	}
-	//	time.Sleep(10 * time.Millisecond)
-	//}
 }
 
 // Leader,检查是否可以更新commitIndex
@@ -709,7 +720,7 @@ func (rf *Raft) sendHeartBeatsToAll() {
 func (rf *Raft) transToFollower(newTerm int) {
 	rf.role = Follower
 	rf.CurrentTerm = newTerm
-	rf.VotedFor = -1
+	//rf.VotedFor = -1
 	rf.persist()
 }
 
@@ -836,6 +847,7 @@ func Make(peers []*labrpc.ClientEnd, me int, persister *Persister, applyCh chan 
 	rf.lastAppliedIndex = 0
 	// 2B end
 	// 2C start
+	rf.lastVoteTerm = -1
 	//rf.lastNewEntryIndex = 0
 	// 2C end
 	// initialize from state persisted before a crash
