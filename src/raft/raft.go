@@ -68,8 +68,12 @@ const (
 	PushLogsTime           = 5 * time.Millisecond  // Leader推送Log的间隔时间
 	checkCommittedLogsTime = 15 * time.Millisecond // Leader更新CommitIndex的间隔时间
 
-	ElectionTimeOutMin = 300 // 选举超时时间(也用于检查是否需要开始选举) 区间
-	ElectionTimeOutMax = 425
+	ElectionTimeOutMin = 400 // 选举超时时间(也用于检查是否需要开始选举) 区间
+	ElectionTimeOutMax = 550
+
+	//ElectionTimeOutMin = 300 // 选举超时时间(也用于检查是否需要开始选举) 区间
+	//ElectionTimeOutMax = 425 // 还可以?
+
 	//ElectionTimeOutMin = 500 // 选举超时时间(也用于检查是否需要开始选举) 区间
 	//ElectionTimeOutMax = 750
 	// 不改时间了
@@ -98,6 +102,15 @@ func getRandElectionTimeOut() time.Duration {
 func (rf *Raft) isHeartBeatTimeOut() bool {
 	return rf.heartBeatTimeOut.Before(time.Now())
 }
+
+/*
+Vote状态
+1.投票给了x,但是还没收到来自Leader的Heart
+那么VotedFor = x,lastVoteTerm = rf.currentTerm
+2.投票给了y,收到了来自Leader的Heart
+收到Header后会清空VotedFor,在Ticker处如果Leader超时就可以自己进行选举
+那么VotedFor = -1,lastVoteTerm = rf.currentTerm
+*/
 
 // 检查当前任期是否有投票,要Lock
 func (rf *Raft) hasVoteToSomeOne() bool {
@@ -149,7 +162,7 @@ type Raft struct {
 	// 2B end
 	// 2C start
 	lastNewEntryIndex int // (for Follower)最后一个新Entre的Index,用于更新commitIndex
-	lastVoteTerm      int
+	lastVoteTerm      int // 最后一次投票的任期(实现每个任期只能投一次票)
 	// 2C end
 }
 
@@ -256,11 +269,10 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	defer rf.mu.Unlock()
 	// 如果接收到的RPC请求或响应中,任期号T>CurrentTerm,那么就令currentTerm等于T,并且切换状态为Follower
 	if args.CandidateTerm > rf.CurrentTerm {
-		//fmt.Printf("s[%v] update Term [%v]->[%v] by s[%v] when RequestVote\n", rf.me, rf.CurrentTerm, args.CandidateTerm, args.CandidateIndex)
 		rf.transToFollower(args.CandidateTerm)
 	}
 	reply.FollowerTerm = rf.CurrentTerm
-	// 是否投票给他
+	// 是否投票给他,要么自己在本任期没有投过票,要么本任期投票的对象是该Candidate
 	if args.CandidateTerm >= rf.CurrentTerm && (rf.hasVoteToSomeOne() == false || rf.getVoteTo() == args.CandidateIndex) {
 		// Candidate的Log至少和自己一样新,才能给他投票
 		if len(rf.Logs) == 0 {
@@ -274,9 +286,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 			reply.VoteGranted = true
 		}
 		if reply.VoteGranted {
-			//rf.VotedFor = args.CandidateIndex
 			rf.heartBeatTimeOut = time.Now().Add(getRandElectionTimeOut())
-			//rf.persist()
 			rf.voteTo(args.CandidateIndex)
 		}
 	}
@@ -391,7 +401,7 @@ func (rf *Raft) killed() bool {
 func (rf *Raft) ticker() {
 	for rf.killed() == false {
 		rf.mu.Lock()
-		// 检查是否要开始领导选举,检查超时时间和角色,并且没有投票给别人
+		// 检查是否要开始领导选举,检查超时时间和角色,并且没有投票给别人或是投了票后收到了某个Leader的Heart,收到后会清空VotedFor
 		if rf.isHeartBeatTimeOut() && (rf.hasVoteToSomeOne() == false || rf.hasVoteToSomeOne() && rf.VotedFor == -1) && rf.role == Follower {
 			rf.mu.Unlock()
 			fmt.Println(rf.me, "start election")
@@ -430,9 +440,6 @@ func (rf *Raft) startElection() {
 	rf.CurrentTerm += 1
 	rf.voteTo(rf.me)
 	rf.heartBeatTimeOut = time.Now().Add(getRandElectionTimeOut())
-	//rf.persist()
-	//rf.VotedFor = rf.me
-	// todo:persist votedFor
 	// 选举开始时只有来自自己的选票
 	for server := 0; server < len(rf.peers); server++ {
 		rf.peersVoteGranted[server] = server == rf.me
@@ -528,7 +535,6 @@ func (rf *Raft) collectVotes() {
 		askVoteArgs.CandidateLastLogIndex = len(rf.Logs)
 		askVoteArgs.CandidateLastLogTerm = rf.Logs[len(rf.Logs)-1].CommandTerm
 	}
-	//st := rf.CurrentTerm
 	rf.mu.Unlock()
 	for server := 0; server < len(rf.peers); server++ {
 		if server != rf.me {
@@ -716,11 +722,10 @@ func (rf *Raft) sendHeartBeatsToAll() {
 	}
 }
 
-// 更新状态为Follower,传入Term,必须在外部Lock的时候使用!
+// 更新任期并转为Follower,Lock的时候使用
 func (rf *Raft) transToFollower(newTerm int) {
 	rf.role = Follower
 	rf.CurrentTerm = newTerm
-	//rf.VotedFor = -1
 	rf.persist()
 }
 
