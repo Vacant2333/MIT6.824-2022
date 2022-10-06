@@ -941,9 +941,11 @@ func TestFigure8Unreliable2C(t *testing.T) {
 		if (rand.Int() % 1000) < 100 {
 			ms := rand.Int63() % (int64(RaftElectionTimeout/time.Millisecond) / 2)
 			time.Sleep(time.Duration(ms) * time.Millisecond)
+			fmt.Printf("Test F8 sleep %vms\n", ms)
 		} else {
 			ms := (rand.Int63() % 13)
 			time.Sleep(time.Duration(ms) * time.Millisecond)
+			fmt.Printf("Test F8 sleep %vms\n", ms)
 		}
 
 		if leader != -1 && (rand.Int()%1000) < int(RaftElectionTimeout/time.Millisecond)/2 {

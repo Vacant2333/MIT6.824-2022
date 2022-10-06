@@ -248,6 +248,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 			reply.VoteGranted = true
 		}
 		if reply.VoteGranted {
+			fmt.Printf("s[%v] vote to s[%v] Term:[%v]\n", rf.me, args.CandidateIndex, rf.CurrentTerm)
 			rf.VotedFor = args.CandidateIndex
 			rf.heartBeatTimeOut = time.Now().Add(getRandElectionTimeOut())
 			rf.persist()
@@ -329,7 +330,10 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		if _, ok := rf.termIndex[term]; ok == false {
 			rf.termIndex[term] = index
 		}
+	} else {
+		fmt.Printf("s[%v] start role:%v voteFor:%v Term:%v logs:%v apply:%v\n", rf.me, rf.role, rf.VotedFor, rf.CurrentTerm, len(rf.Logs), rf.lastAppliedIndex)
 	}
+
 	rf.mu.Unlock()
 	// 2B end
 	return index, term, isLeader
@@ -374,10 +378,11 @@ func (rf *Raft) ticker() {
 	}
 }
 
-// apply那些commit的logs
+// Apply那些Commit的Logs
 func (rf *Raft) applier() {
 	for rf.killed() == false {
 		rf.mu.Lock()
+		// commitIndex不能超过最后一条Log的Index todo:为啥会超?
 		rf.commitIndex = min(rf.commitIndex, len(rf.Logs))
 		if rf.commitIndex > rf.lastAppliedIndex {
 			for index := rf.lastAppliedIndex + 1; index <= rf.commitIndex; index++ {
@@ -396,10 +401,11 @@ func (rf *Raft) applier() {
 func (rf *Raft) startElection() {
 	rf.mu.Lock()
 	// 初始化投票数据
-	rf.VotedFor = rf.me
 	rf.CurrentTerm += 1
 	rf.heartBeatTimeOut = time.Now().Add(getRandElectionTimeOut())
 	rf.persist()
+	rf.VotedFor = rf.me
+	// todo:persist votedFor
 	// 选举开始时只有来自自己的选票
 	for server := 0; server < len(rf.peers); server++ {
 		rf.peersVoteGranted[server] = server == rf.me
@@ -412,7 +418,12 @@ func (rf *Raft) startElection() {
 	for rf.killed() == false {
 		rf.mu.Lock()
 		voteCount := rf.getGrantedVotes()
-		if voteCount > len(rf.peers)/2 {
+		if rf.role == Follower {
+			// 2.其他人成为了Leader,Candidate转为了Follower
+			fmt.Printf("another is leader now,s[%v] Term:[%v]\n", rf.me, rf.CurrentTerm)
+			rf.mu.Unlock()
+			return
+		} else if voteCount > len(rf.peers)/2 {
 			// 1.赢得了大部分选票,成为Leader
 			fmt.Printf("L[%v] is a Leader now Term:[%v]\n", rf.me, rf.CurrentTerm)
 			rf.role = Leader
@@ -439,11 +450,6 @@ func (rf *Raft) startElection() {
 			go rf.sendHeartBeatsToAll()
 			go rf.checkCommittedLogs()
 			return
-		} else if rf.role == Follower {
-			// 2.其他人成为了Leader,Candidate转为了Follower
-			fmt.Printf("another is leader now,s[%v] Term:[%v]\n", rf.me, rf.CurrentTerm)
-			rf.mu.Unlock()
-			return
 		} else if rf.isHeartBeatTimeOut() {
 			// 3.选举超时,重新开始选举
 			fmt.Printf("s[%v] re elect,Term:[%v]\n", rf.me, rf.CurrentTerm)
@@ -454,8 +460,6 @@ func (rf *Raft) startElection() {
 		rf.mu.Unlock()
 		time.Sleep(ElectionSleepTime)
 	}
-	rf.VotedFor = -1
-	rf.persist()
 }
 
 // 获得当前已获得的选票数量,Lock的时候使用
@@ -497,12 +501,29 @@ func (rf *Raft) collectVotes() {
 		askVoteArgs.CandidateLastLogIndex = len(rf.Logs)
 		askVoteArgs.CandidateLastLogTerm = rf.Logs[len(rf.Logs)-1].CommandTerm
 	}
+	//st := rf.CurrentTerm
 	rf.mu.Unlock()
 	for server := 0; server < len(rf.peers); server++ {
 		if server != rf.me {
 			go askVote(server, askVoteArgs)
 		}
 	}
+	// todo:test持续收集选票
+	//for {
+	//	rf.mu.Lock()
+	//	if rf.role != Candidate || rf.killed() || rf.CurrentTerm != st {
+	//		rf.mu.Unlock()
+	//		break
+	//	} else {
+	//		rf.mu.Unlock()
+	//	}
+	//	for server := 0; server < len(rf.peers); server++ {
+	//		if server != rf.me {
+	//			go askVote(server, askVoteArgs)
+	//		}
+	//	}
+	//	time.Sleep(10 * time.Millisecond)
+	//}
 }
 
 // Leader,检查是否可以更新commitIndex
@@ -546,13 +567,14 @@ func (rf *Raft) checkCommittedLogs() {
 func (rf *Raft) updateCommitIndex(commitIndex int) {
 	if commitIndex > rf.commitIndex {
 		fmt.Printf("s[%v] update commitIndex [%v]->[%v]\n", rf.me, rf.commitIndex, commitIndex)
+		// commitIndex不能超过最后一条Log的Index todo:为啥会超?
 		rf.commitIndex = min(commitIndex, len(rf.Logs))
 	}
 }
 
 func (rf *Raft) pushLogsToFollower(server int, startTerm int) {
 	// 如果推送失败就要立即Retry,启动时push一次加速同步
-	retry := false
+	retry := true
 	for rf.killed() == false {
 		rf.mu.Lock()
 		if rf.role != Leader || rf.CurrentTerm != startTerm {
@@ -604,7 +626,7 @@ func (rf *Raft) pushLogsToFollower(server int, startTerm int) {
 					}
 				} else {
 					// Follower的日志太短了
-					rf.nextIndex[server] = pushReply.ConflictIndex + 1
+					rf.nextIndex[server] = pushReply.ConflictIndex
 				}
 				fmt.Printf("s[%v] nextIndex:[%v]->[%v]\n", server, old, rf.nextIndex[server])
 			}
