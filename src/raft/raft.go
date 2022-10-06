@@ -46,7 +46,7 @@ type ApplyMsg struct {
 	CommandValid bool
 	Command      interface{}
 	CommandIndex int
-	CommandTerm  int // 2B: 指令的任期
+	CommandTerm  int
 
 	// For 2D:
 	SnapshotValid bool
@@ -61,22 +61,15 @@ const (
 	Leader    = 3
 
 	TickerSleepTime   = 10 * time.Millisecond  // Ticker 睡眠时间 ms
-	ApplierSleepTime  = 6 * time.Millisecond   // Applier睡眠时间
-	ElectionSleepTime = 5 * time.Millisecond   // 选举睡眠时间
+	ApplierSleepTime  = 15 * time.Millisecond  // Applier睡眠时间
+	ElectionSleepTime = 10 * time.Millisecond  // 选举睡眠时间
 	HeartBeatSendTime = 100 * time.Millisecond // 心跳包发送时间 ms
 
 	PushLogsTime           = 5 * time.Millisecond  // Leader推送Log的间隔时间
 	checkCommittedLogsTime = 15 * time.Millisecond // Leader更新CommitIndex的间隔时间
 
-	//ElectionTimeOutMin = 400 // 选举超时时间(也用于检查是否需要开始选举) 区间
-	//ElectionTimeOutMax = 550
-
-	ElectionTimeOutMin = 300 // 选举超时时间(也用于检查是否需要开始选举) 区间
-	ElectionTimeOutMax = 425 // 还可以?
-
-	//ElectionTimeOutMin = 500 // 选举超时时间(也用于检查是否需要开始选举) 区间
-	//ElectionTimeOutMax = 750
-	// 不改时间了
+	ElectionTimeOutMin = 500 // 选举超时时间(也用于检查是否需要开始选举) 区间
+	ElectionTimeOutMax = 600
 )
 
 func min(a int, b int) int {
@@ -114,11 +107,10 @@ Vote状态
 
 // 检查当前任期是否有投票,要Lock
 func (rf *Raft) hasVoteToSomeOne() bool {
-	// todo: <=
 	return rf.CurrentTerm == rf.lastVoteTerm
 }
 
-// 获得当前任期投给的Server
+// 获得当前任期投给的Server,要Lock
 func (rf *Raft) getVoteTo() int {
 	if rf.hasVoteToSomeOne() {
 		return rf.VotedFor
@@ -126,7 +118,7 @@ func (rf *Raft) getVoteTo() int {
 	return -1
 }
 
-// 投票给某个Candidate
+// 投票给某个Candidate,要Lock
 func (rf *Raft) voteTo(server int) {
 	rf.VotedFor = server
 	rf.lastVoteTerm = rf.CurrentTerm
@@ -367,9 +359,8 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 			rf.termIndex[term] = index
 		}
 	} else {
-		fmt.Printf("s[%v] start role:%v voteFor:%v voteTerm:%v Term:%v logs:%v apply:%v\n", rf.me, rf.role, rf.VotedFor, rf.lastVoteTerm, rf.CurrentTerm, len(rf.Logs), rf.lastAppliedIndex)
+		fmt.Printf("s[%v] Start role:%v voteFor:%v voteTerm:%v Term:%v logs:%v apply:%v\n", rf.me, rf.role, rf.VotedFor, rf.lastVoteTerm, rf.CurrentTerm, len(rf.Logs), rf.lastAppliedIndex)
 	}
-
 	rf.mu.Unlock()
 	// 2B end
 	return index, term, isLeader
@@ -407,7 +398,6 @@ func (rf *Raft) ticker() {
 			fmt.Println(rf.me, "start election")
 			rf.startElection()
 		} else {
-			//fmt.Printf("s[%v] ticker votedFor:%v voteTerm:%v term:%v\n", rf.me, rf.VotedFor, rf.lastVoteTerm, rf.CurrentTerm)
 			rf.mu.Unlock()
 		}
 		time.Sleep(TickerSleepTime)
@@ -455,6 +445,8 @@ func (rf *Raft) startElection() {
 		if rf.role == Follower {
 			// 2.其他人成为了Leader,Candidate转为了Follower
 			fmt.Printf("C[%v] another is leader now Term:[%v]\n", rf.me, rf.CurrentTerm)
+			rf.VotedFor = -1
+			rf.persist()
 			rf.mu.Unlock()
 			return
 		} else if voteCount > len(rf.peers)/2 {
@@ -489,7 +481,7 @@ func (rf *Raft) startElection() {
 			return
 		} else if rf.isHeartBeatTimeOut() {
 			// 3.选举超时,重新开始选举
-			fmt.Printf("s[%v] re elect,Term:[%v]\n", rf.me, rf.CurrentTerm)
+			fmt.Printf("s[%v] election timeout, startElection now, Term:[%v]\n", rf.me, rf.CurrentTerm)
 			rf.mu.Unlock()
 			rf.startElection()
 			return
@@ -497,6 +489,11 @@ func (rf *Raft) startElection() {
 		rf.mu.Unlock()
 		time.Sleep(ElectionSleepTime)
 	}
+	// 和Follower接收到Heart后清空VotedFor同理,意味着投票阶段结束,自己挂了,设为-1才能在恢复后重新选举
+	rf.mu.Lock()
+	rf.VotedFor = -1
+	rf.persist()
+	rf.mu.Unlock()
 }
 
 // 获得当前已获得的选票数量,Lock的时候使用
@@ -604,7 +601,6 @@ func (rf *Raft) pushLogsToFollower(server int, startTerm int) {
 			return
 		}
 		if len(rf.Logs) >= rf.nextIndex[server] || retry {
-			// nextIndex最小要为1
 			followerNextIndex := rf.nextIndex[server]
 			pushLogs := make([]ApplyMsg, len(rf.Logs[followerNextIndex-1:]))
 			// 必须Copy不能直接传,不然会导致Race
@@ -648,7 +644,7 @@ func (rf *Raft) pushLogsToFollower(server int, startTerm int) {
 					// Follower的日志太短了
 					rf.nextIndex[server] = pushReply.ConflictIndex
 				}
-				fmt.Printf("s[%v] nextIndex:[%v]->[%v]\n", server, old, rf.nextIndex[server])
+				fmt.Printf("L[%v] change s[%v] nextIndex:[%v]->[%v]\n", rf.me, server, old, rf.nextIndex[server])
 			}
 			// 防止nextIndex被设为0,最低为1
 			rf.nextIndex[server] = max(rf.nextIndex[server], 1)
@@ -728,6 +724,7 @@ func (rf *Raft) sendHeartBeatsToAll() {
 // 更新任期并转为Follower,Lock的时候使用
 func (rf *Raft) transToFollower(newTerm int) {
 	rf.role = Follower
+	//rf.VotedFor = -1
 	rf.CurrentTerm = newTerm
 	rf.persist()
 }
@@ -816,7 +813,6 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 		reply.Success = false
 		return
 	}
-	//fmt.Printf("s[%v] lastNew:%v len:%v commit:%v term:%v\n", rf.me, rf.lastNewEntryIndex, len(rf.Logs), rf.commitIndex, rf.CurrentTerm)
 	rf.persist()
 	// 更新commitIndex
 	if args.LeaderCommit > rf.commitIndex {
@@ -841,23 +837,19 @@ func Make(peers []*labrpc.ClientEnd, me int, persister *Persister, applyCh chan 
 	rf.persister = persister
 	rf.me = me
 	// Your initialization code here (2A, 2B, 2C).
-	// 2A start
+	// 2A
 	rf.VotedFor = -1
 	rf.peersVoteGranted = make([]bool, len(peers))
 	rf.CurrentTerm = 0
 	rf.role = Follower
 	rf.heartBeatTimeOut = time.Now().Add(getRandElectionTimeOut())
-	// 2A end
-	// 2B start
+	// 2B
 	rf.applyCh = applyCh
 	rf.Logs = make([]ApplyMsg, 0)
 	rf.commitIndex = 0
 	rf.lastAppliedIndex = 0
-	// 2B end
-	// 2C start
+	// 2C
 	rf.lastVoteTerm = -1
-	//rf.lastNewEntryIndex = 0
-	// 2C end
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 	// start ticker goroutine to start elections
