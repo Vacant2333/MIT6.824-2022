@@ -68,10 +68,8 @@ const (
 	PushLogsTime           = 5 * time.Millisecond  // Leader推送Log的间隔时间
 	checkCommittedLogsTime = 15 * time.Millisecond // Leader更新CommitIndex的间隔时间
 
-	//ElectionTimeOutMin = 500 // 选举超时时间(也用于检查是否需要开始选举) 区间
-	//ElectionTimeOutMax = 600
-	ElectionTimeOutMin = 400 // 选举超时时间(也用于检查是否需要开始选举) 区间
-	ElectionTimeOutMax = 550
+	ElectionTimeOutMin = 500 // 选举超时时间(也用于检查是否需要开始选举) 区间
+	ElectionTimeOutMax = 600
 )
 
 func min(a int, b int) int {
@@ -374,7 +372,6 @@ func (rf *Raft) ticker() {
 func (rf *Raft) applier() {
 	for rf.killed() == false {
 		rf.mu.Lock()
-		// commitIndex不能超过最后一条Log的Index todo:为啥会超?
 		rf.commitIndex = min(rf.commitIndex, len(rf.Logs))
 		if rf.commitIndex > rf.lastAppliedIndex {
 			for index := rf.lastAppliedIndex + 1; index <= rf.commitIndex; index++ {
@@ -541,7 +538,6 @@ func (rf *Raft) checkCommittedLogs() {
 func (rf *Raft) updateCommitIndex(commitIndex int) {
 	if commitIndex > rf.commitIndex {
 		fmt.Printf("s[%v] update commitIndex [%v]->[%v]\n", rf.me, rf.commitIndex, commitIndex)
-		// commitIndex不能超过最后一条Log的Index todo:为啥会超?
 		rf.commitIndex = min(commitIndex, len(rf.Logs))
 	}
 }
@@ -683,6 +679,8 @@ func (rf *Raft) transToFollower(newTerm int) {
 	rf.role = Follower
 	rf.VotedFor = -1
 	rf.CurrentTerm = newTerm
+	// 任期改变时上一条Log的信息作废
+	rf.lastNewEntryIndex = 0
 	rf.persist()
 }
 
@@ -727,9 +725,6 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 		// 如果是第一条Log不校验
 		rf.Logs = args.Logs
 		reply.Success = true
-		if len(args.Logs) > 0 && args.Logs[len(args.Logs)-1].CommandIndex >= rf.commitIndex {
-			rf.lastNewEntryIndex = args.Logs[len(args.Logs)-1].CommandIndex
-		}
 	} else if args.PrevLogIndex <= len(rf.Logs) && rf.Logs[args.PrevLogIndex-1].CommandTerm == args.PrevLogTerm {
 		// 校验正常,逐条追加,index为在Follower的Logs中的下一个Log的Index
 		for _, log := range args.Logs {
@@ -746,9 +741,6 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 			}
 		}
 		reply.Success = true
-		if len(args.Logs) > 0 && args.Logs[len(args.Logs)-1].CommandIndex >= rf.commitIndex {
-			rf.lastNewEntryIndex = args.Logs[len(args.Logs)-1].CommandIndex
-		}
 	} else if args.PrevLogIndex <= len(rf.Logs) && rf.Logs[args.PrevLogIndex-1].CommandTerm != args.PrevLogTerm {
 		// 发生冲突,索引相同任期不同,删除从PrevLogIndex开始之后的所有Log
 		reply.ConflictTerm = rf.Logs[args.PrevLogIndex-1].CommandTerm
@@ -768,6 +760,10 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 		reply.ConflictIndex = len(rf.Logs)
 		reply.Success = false
 		return
+	}
+	// 更新最后一条新Entry的下标,如果校验失败不会走到这里
+	if len(args.Logs) > 0 && args.Logs[len(args.Logs)-1].CommandIndex >= rf.commitIndex {
+		rf.lastNewEntryIndex = args.Logs[len(args.Logs)-1].CommandIndex
 	}
 	rf.persist()
 	// 更新commitIndex
