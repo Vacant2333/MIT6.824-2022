@@ -20,6 +20,7 @@ package raft
 import (
 	"bytes"
 	"fmt"
+	"log"
 	"math/rand"
 	"mit6.824/labgob"
 	"sort"
@@ -55,18 +56,45 @@ type ApplyMsg struct {
 	SnapshotIndex int
 }
 
+// Raft
+// A Go object implementing a single Raft peer.
+//
+type Raft struct {
+	mu        sync.Mutex          // Lock to protect shared access to this peer's state
+	peers     []*labrpc.ClientEnd // RPC end points of all peers
+	persister *Persister          // Object to hold this peer's persisted state
+	me        int                 // this peer's index into peers[]
+	dead      int32               // set by Kill()
+	// 2A
+	VotedFor         int       // (持久化)当前投票给的用户
+	CurrentTerm      int       // (持久化)当前任期
+	peersVoteGranted []bool    // 已获得的选票
+	role             int       // 角色， Follower, Candidate, Leader
+	heartBeatTimeOut time.Time // 上一次收到心跳包的时间+随机选举超时时间(在收到心跳包后再次随机一个)
+	// 2B
+	applyCh          chan ApplyMsg // apply的Log发送到这个Chan里
+	Logs             []ApplyMsg    // (持久化)日志条目;每个条目包含了用于状态机的命令,以及领导者接收到该条目时的任期(第一个索引为1)
+	commitIndex      int           // 日志中最后一条提交了的Log的下标(易失,初始为0,单调递增)
+	lastAppliedIndex int           // 日志中被应用到状态机的最高一条的下标(易失,初始为0,单调递增)
+	nextIndex        []int         // (for Leader,成为Leader后初始化)对于每台服务器,发送的下一条log的索引(初始为Leader的最大索引+1)
+	matchIndex       []int         // (for Leader,成为Leader后初始化)对于每台服务器,已知的已复制到该服务器的最高索引(默认为0,单调递增)
+	termIndex        map[int]int   // (for Leader,成为Leader后初始化)Logs中每个Term的第一条Log的Index
+	// 2C
+	lastNewEntryIndex int // (for Follower)最后一个新Entre的Index,用于更新commitIndex
+}
+
 const (
 	Follower  = 1
 	Candidate = 2
 	Leader    = 3
 
-	TickerSleepTime   = 10 * time.Millisecond  // Ticker 睡眠时间 ms
-	ApplierSleepTime  = 15 * time.Millisecond  // Applier睡眠时间
+	TickerSleepTime   = 25 * time.Millisecond  // Ticker 睡眠时间 ms
+	ApplierSleepTime  = 20 * time.Millisecond  // Applier睡眠时间
 	ElectionSleepTime = 10 * time.Millisecond  // 选举睡眠时间
 	HeartBeatSendTime = 100 * time.Millisecond // 心跳包发送时间 ms
 
-	PushLogsTime           = 5 * time.Millisecond  // Leader推送Log的间隔时间
-	checkCommittedLogsTime = 15 * time.Millisecond // Leader更新CommitIndex的间隔时间
+	PushLogsTime           = 12 * time.Millisecond // Leader推送Log的间隔时间
+	checkCommittedLogsTime = 25 * time.Millisecond // Leader更新CommitIndex的间隔时间
 
 	ElectionTimeOutMin = 500 // 选举超时时间(也用于检查是否需要开始选举) 区间
 	ElectionTimeOutMax = 600
@@ -96,31 +124,17 @@ func (rf *Raft) isHeartBeatTimeOut() bool {
 	return rf.heartBeatTimeOut.Before(time.Now())
 }
 
-// Raft
-// A Go object implementing a single Raft peer.
-//
-type Raft struct {
-	mu        sync.Mutex          // Lock to protect shared access to this peer's state
-	peers     []*labrpc.ClientEnd // RPC end points of all peers
-	persister *Persister          // Object to hold this peer's persisted state
-	me        int                 // this peer's index into peers[]
-	dead      int32               // set by Kill()
-	// 2A
-	VotedFor         int       // (持久化)当前投票给的用户
-	CurrentTerm      int       // (持久化)当前任期
-	peersVoteGranted []bool    // 已获得的选票
-	role             int       // 角色， Follower, Candidate, Leader
-	heartBeatTimeOut time.Time // 上一次收到心跳包的时间+随机选举超时时间(在收到心跳包后再次随机一个)
-	// 2B
-	applyCh          chan ApplyMsg // apply的Log发送到这个Chan里
-	Logs             []ApplyMsg    // (持久化)日志条目;每个条目包含了用于状态机的命令,以及领导者接收到该条目时的任期(第一个索引为1)
-	commitIndex      int           // 日志中最后一条提交了的Log的下标(易失,初始为0,单调递增)
-	lastAppliedIndex int           // 日志中被应用到状态机的最高一条的下标(易失,初始为0,单调递增)
-	nextIndex        []int         // (for Leader,成为Leader后初始化)对于每台服务器,发送的下一条log的索引(初始为Leader的最大索引+1)
-	matchIndex       []int         // (for Leader,成为Leader后初始化)对于每台服务器,已知的已复制到该服务器的最高索引(默认为0,单调递增)
-	termIndex        map[int]int   // (for Leader,成为Leader后初始化)Logs中每个Term的第一条Log的Index
-	// 2C
-	lastNewEntryIndex int // (for Follower)最后一个新Entre的Index,用于更新commitIndex
+// 更新任期并转为Follower,Lock的时候使用,新的任期必须大于当前任期
+func (rf *Raft) increaseTerm(term int) {
+	if term <= rf.CurrentTerm {
+		log.Fatalf("s[%v] update term:%v error!", rf.me, term)
+	}
+	rf.role = Follower
+	rf.CurrentTerm = term
+	// 任期改变时Vote和lastNewEntry的信息作废
+	rf.lastNewEntryIndex = 0
+	rf.VotedFor = -1
+	rf.persist()
 }
 
 // GetState return CurrentTerm and whether this server
@@ -217,7 +231,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	defer rf.mu.Unlock()
 	// 如果接收到的RPC请求或响应中,任期号T>CurrentTerm,那么就令currentTerm等于T,并且切换状态为Follower
 	if args.CandidateTerm > rf.CurrentTerm {
-		rf.transToFollower(args.CandidateTerm)
+		rf.increaseTerm(args.CandidateTerm)
 	}
 	reply.FollowerTerm = rf.CurrentTerm
 	// 是否投票给他,要么自己在本任期没有投过票,要么本任期投票的对象是该Candidate
@@ -339,8 +353,8 @@ func (rf *Raft) killed() bool {
 func (rf *Raft) ticker() {
 	for rf.killed() == false {
 		rf.mu.Lock()
-		// 检查是否要开始领导选举
-		if rf.isHeartBeatTimeOut() && rf.role == Follower {
+		// 检查是否要开始领导选举,给予其他人选票或者收到Leader的AppendEntries时会重置TimeOut
+		if rf.isHeartBeatTimeOut() {
 			rf.mu.Unlock()
 			fmt.Println(rf.me, "start election")
 			rf.startElection()
@@ -375,12 +389,12 @@ func (rf *Raft) startElection() {
 	// 初始化投票数据
 	rf.CurrentTerm += 1
 	rf.VotedFor = rf.me
+	rf.role = Candidate
 	rf.heartBeatTimeOut = time.Now().Add(getRandElectionTimeOut())
 	// 选举开始时只有来自自己的选票
 	for server := 0; server < len(rf.peers); server++ {
 		rf.peersVoteGranted[server] = server == rf.me
 	}
-	rf.role = Candidate
 	rf.persist()
 	rf.mu.Unlock()
 	// 并行地收集选票
@@ -458,7 +472,7 @@ func (rf *Raft) collectVotes() {
 			rf.peersVoteGranted[server] = true
 		} else if reply.FollowerTerm > rf.CurrentTerm {
 			// 如果接收到的RPC请求或响应中,任期号T>CurrentTerm,那么就令currentTerm等于T,并且切换状态为Follower
-			rf.transToFollower(reply.FollowerTerm)
+			rf.increaseTerm(reply.FollowerTerm)
 		}
 	}
 	// args保持一致
@@ -556,7 +570,7 @@ func (rf *Raft) pushLogsToFollower(server int, startTerm int) {
 				fmt.Printf("L[%v] push log to F[%v] success,Leader LogsLen:[%v] pushLast:[%v] pushLen:[%v]\n", rf.me, server, len(rf.Logs), pushLastIndex, len(pushLogs))
 			} else if pushReply.FollowerTerm > rf.CurrentTerm {
 				// 如果接收到的RPC请求或响应中,任期号T>CurrentTerm,那么就令currentTerm等于T,并且切换状态为Follower
-				rf.transToFollower(pushReply.FollowerTerm)
+				rf.increaseTerm(pushReply.FollowerTerm)
 				rf.mu.Unlock()
 				return
 			} else {
@@ -586,7 +600,10 @@ func (rf *Raft) pushLogsToFollower(server int, startTerm int) {
 			rf.nextIndex[server] = max(rf.nextIndex[server], 1)
 		}
 		rf.mu.Unlock()
-		time.Sleep(PushLogsTime)
+		// 如果需要重试,不等待
+		if !retry {
+			time.Sleep(PushLogsTime)
+		}
 	}
 }
 
@@ -623,7 +640,7 @@ func (rf *Raft) sendHeartBeatsToAll() {
 		defer rf.mu.Unlock()
 		// 如果接收到的RPC请求或响应中,任期号T>CurrentTerm,那么就令currentTerm等于T,并且切换状态为Follower
 		if reply.FollowerTerm > rf.CurrentTerm {
-			rf.transToFollower(reply.FollowerTerm)
+			rf.increaseTerm(reply.FollowerTerm)
 		}
 		return ok && reply.Success
 	}
@@ -657,16 +674,6 @@ func (rf *Raft) sendHeartBeatsToAll() {
 	}
 }
 
-// 更新任期并转为Follower,Lock的时候使用
-func (rf *Raft) transToFollower(newTerm int) {
-	rf.role = Follower
-	rf.CurrentTerm = newTerm
-	// 任期改变时Vote和lastNewEntry的信息作废
-	rf.lastNewEntryIndex = 0
-	rf.VotedFor = -1
-	rf.persist()
-}
-
 // AppendEnTriesArgs 心跳/追加包
 type AppendEnTriesArgs struct {
 	LeaderTerm   int        // Leader的Term
@@ -691,7 +698,7 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 	reply.FollowerTerm = rf.CurrentTerm
 	// 如果接收到的RPC请求或响应中,任期号T>CurrentTerm,那么就令currentTerm等于T,并且切换状态为Follower
 	if args.LeaderTerm > rf.CurrentTerm {
-		rf.transToFollower(args.LeaderTerm)
+		rf.increaseTerm(args.LeaderTerm)
 	} else if args.LeaderTerm < rf.CurrentTerm {
 		// 不正常的包,Leader的Term小于Follower的Term
 		reply.Success = false
