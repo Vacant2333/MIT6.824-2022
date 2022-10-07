@@ -132,6 +132,7 @@ func (rf *Raft) increaseTerm(term int) {
 	rf.role = Follower
 	rf.CurrentTerm = term
 	// 任期改变时Vote和lastNewEntry的信息作废
+	// todo:test init new entry
 	rf.lastNewEntryIndex = 0
 	rf.VotedFor = -1
 	rf.persist()
@@ -353,8 +354,8 @@ func (rf *Raft) killed() bool {
 func (rf *Raft) ticker() {
 	for rf.killed() == false {
 		rf.mu.Lock()
-		// 检查是否要开始领导选举,给予其他人选票或者收到Leader的AppendEntries时会重置TimeOut
-		if rf.isHeartBeatTimeOut() {
+		// 检查是否要开始领导选举
+		if rf.isHeartBeatTimeOut() && rf.role == Follower {
 			rf.mu.Unlock()
 			fmt.Println(rf.me, "start election")
 			rf.startElection()
