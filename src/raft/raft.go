@@ -105,15 +105,13 @@ type Raft struct {
 	persister *Persister          // Object to hold this peer's persisted state
 	me        int                 // this peer's index into peers[]
 	dead      int32               // set by Kill()
-	// Your data here (2A, 2B, 2C).
-	// 2A start
+	// 2A
 	VotedFor         int       // (持久化)当前投票给的用户
 	CurrentTerm      int       // (持久化)当前任期
 	peersVoteGranted []bool    // 已获得的选票
 	role             int       // 角色， Follower, Candidate, Leader
 	heartBeatTimeOut time.Time // 上一次收到心跳包的时间+随机选举超时时间(在收到心跳包后再次随机一个)
-	// 2A end
-	// 2B start
+	// 2B
 	applyCh          chan ApplyMsg // apply的Log发送到这个Chan里
 	Logs             []ApplyMsg    // (持久化)日志条目;每个条目包含了用于状态机的命令,以及领导者接收到该条目时的任期(第一个索引为1)
 	commitIndex      int           // 日志中最后一条提交了的Log的下标(易失,初始为0,单调递增)
@@ -121,10 +119,8 @@ type Raft struct {
 	nextIndex        []int         // (for Leader,成为Leader后初始化)对于每台服务器,发送的下一条log的索引(初始为Leader的最大索引+1)
 	matchIndex       []int         // (for Leader,成为Leader后初始化)对于每台服务器,已知的已复制到该服务器的最高索引(默认为0,单调递增)
 	termIndex        map[int]int   // (for Leader,成为Leader后初始化)Logs中每个Term的第一条Log的Index
-	// 2B end
-	// 2C start
+	// 2C
 	lastNewEntryIndex int // (for Follower)最后一个新Entre的Index,用于更新commitIndex
-	// 2C end
 }
 
 // GetState return CurrentTerm and whether this server
@@ -132,13 +128,10 @@ type Raft struct {
 func (rf *Raft) GetState() (int, bool) {
 	var term int
 	var isLeader bool
-	// Your code here (2A).
-	// 2A start
 	rf.mu.Lock()
 	term = rf.CurrentTerm
 	isLeader = rf.role == Leader
 	rf.mu.Unlock()
-	// 2A end
 	return term, isLeader
 }
 
@@ -161,7 +154,7 @@ func (rf *Raft) persist() {
 // restore previously persisted state.
 // 读取状态,必须在Lock的时候使用
 func (rf *Raft) readPersist(data []byte) {
-	if data == nil || len(data) < 1 { // bootstrap without any state?
+	if data == nil || len(data) < 1 {
 		return
 	}
 	decoder := labgob.NewDecoder(bytes.NewBuffer(data))
@@ -201,7 +194,6 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 // field names must start with capital letters!
 //
 type RequestVoteArgs struct {
-	// Your data here (2A, 2B).
 	CandidateTerm         int // 候选人的任期号
 	CandidateIndex        int // 候选人的Index
 	CandidateLastLogIndex int // 候选人的最后日志条目的索引
@@ -213,7 +205,6 @@ type RequestVoteArgs struct {
 // field names must start with capital letters!
 //
 type RequestVoteReply struct {
-	// Your data here (2A).
 	FollowerTerm int  // 当前任期号,以便候选人更新自己的任期号
 	VoteGranted  bool // 候选人是否赢得选票
 }
@@ -222,7 +213,6 @@ type RequestVoteReply struct {
 // example RequestVote RPC handler.
 //
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
-	// Your code here (2A, 2B).
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	// 如果接收到的RPC请求或响应中,任期号T>CurrentTerm,那么就令currentTerm等于T,并且切换状态为Follower
@@ -300,17 +290,13 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 // the leader.
 // 接受一条来自客户端的Log
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
-	index := -1
-	term := -1
-	isLeader := true
-	// Your code here (2B).
-	// 2B start
 	rf.mu.Lock()
-	isLeader = rf.role == Leader
-	term = rf.CurrentTerm
+	defer rf.mu.Unlock()
+	index := -1
+	term := rf.CurrentTerm
+	isLeader := rf.role == Leader
 	if isLeader {
 		index = len(rf.Logs) + 1
-		term = rf.CurrentTerm
 		log := ApplyMsg{
 			CommandValid: false,
 			Command:      command,
@@ -325,8 +311,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 			rf.termIndex[term] = index
 		}
 	}
-	rf.mu.Unlock()
-	// 2B end
 	return index, term, isLeader
 }
 
@@ -343,7 +327,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 //
 func (rf *Raft) Kill() {
 	atomic.StoreInt32(&rf.dead, 1)
-	// Your code here, if desired.
 }
 
 func (rf *Raft) killed() bool {
@@ -368,7 +351,7 @@ func (rf *Raft) ticker() {
 	}
 }
 
-// Apply那些Commit的Logs
+// Apply Logs
 func (rf *Raft) applier() {
 	for rf.killed() == false {
 		rf.mu.Lock()
@@ -392,15 +375,15 @@ func (rf *Raft) startElection() {
 	// 初始化投票数据
 	rf.CurrentTerm += 1
 	rf.VotedFor = rf.me
-	rf.persist()
 	rf.heartBeatTimeOut = time.Now().Add(getRandElectionTimeOut())
 	// 选举开始时只有来自自己的选票
 	for server := 0; server < len(rf.peers); server++ {
 		rf.peersVoteGranted[server] = server == rf.me
 	}
 	rf.role = Candidate
+	rf.persist()
 	rf.mu.Unlock()
-	// 并行收集选票
+	// 并行地收集选票
 	go rf.collectVotes()
 	// 检查结果
 	for rf.killed() == false {
@@ -543,12 +526,12 @@ func (rf *Raft) updateCommitIndex(commitIndex int) {
 }
 
 func (rf *Raft) pushLogsToFollower(server int, startTerm int) {
-	// 如果推送失败就要立即Retry,启动时push一次加速同步
+	// 如果推送失败就要立即Retry,成为Leader时Push一次来加速同步
 	retry := true
 	for rf.killed() == false {
 		rf.mu.Lock()
 		if rf.role != Leader || rf.CurrentTerm != startTerm {
-			// 如果不是Leader了或是任期更改了,停止推送
+			// 如果不是Leader了或是任期变更了,停止推送
 			fmt.Printf("s[%v] stop push entry to s[%v] role:%v term:%v->%v\n", rf.me, server, rf.role, startTerm, rf.CurrentTerm)
 			rf.mu.Unlock()
 			return
@@ -677,10 +660,10 @@ func (rf *Raft) sendHeartBeatsToAll() {
 // 更新任期并转为Follower,Lock的时候使用
 func (rf *Raft) transToFollower(newTerm int) {
 	rf.role = Follower
-	rf.VotedFor = -1
 	rf.CurrentTerm = newTerm
-	// 任期改变时上一条Log的信息作废
+	// 任期改变时Vote和lastNewEntry的信息作废
 	rf.lastNewEntryIndex = 0
+	rf.VotedFor = -1
 	rf.persist()
 }
 
