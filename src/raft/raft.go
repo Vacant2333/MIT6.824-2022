@@ -166,8 +166,8 @@ func (rf *Raft) readPersist(data []byte) {
 		rf.VotedFor = votedFor
 		rf.CurrentTerm = currentTerm
 		rf.Logs = logs
+		fmt.Printf("s[%v] readPersist logsLen:[%v] Term:[%v]\n", rf.me, len(logs), rf.CurrentTerm)
 	}
-	fmt.Printf("s[%v] readPersist logsLen:%v Term:%v\n", rf.me, len(logs), rf.CurrentTerm)
 }
 
 //
@@ -276,7 +276,7 @@ func (rf *Raft) ticker() {
 		// 检查是否要开始领导选举
 		if rf.isHeartBeatTimeOut() && rf.role == Follower {
 			rf.mu.Unlock()
-			fmt.Println(rf.me, "start election")
+			fmt.Printf("s[%v] start a election now,Term:[%v]\n", rf.me, rf.CurrentTerm)
 			rf.startElection()
 		} else {
 			rf.mu.Unlock()
@@ -330,12 +330,12 @@ func (rf *Raft) startElection() {
 		voteCount := rf.getGrantedVotes()
 		if rf.role == Follower {
 			// 2.其他人成为了Leader,Candidate转为了Follower
-			fmt.Printf("C[%v] another is leader now Term:[%v]\n", rf.me, rf.CurrentTerm)
+			fmt.Printf("C[%v] another server is leader now, Term:[%v]\n", rf.me, rf.CurrentTerm)
 			rf.mu.Unlock()
 			return
 		} else if voteCount > len(rf.peers)/2 {
 			// 1.赢得了大部分选票,成为Leader
-			fmt.Printf("L[%v] is a Leader now Term:[%v]\n", rf.me, rf.CurrentTerm)
+			fmt.Printf("L[%v] is a Leader now, Term:[%v]\n", rf.me, rf.CurrentTerm)
 			rf.role = Leader
 			// 初始化Leader需要的内容
 			rf.nextIndex = make([]int, len(rf.peers))
@@ -345,7 +345,7 @@ func (rf *Raft) startElection() {
 					// 初始化nextIndex为Leader的最后条目索引+1
 					rf.nextIndex[server] = len(rf.Logs) + 1
 					// 持续通过检查matchIndex给Follower发送新的Log
-					go rf.pushLogsToFollower(server, rf.CurrentTerm)
+					go rf.pushLogsToFollower(server)
 				}
 			}
 			// 初始化每个Term的第一个Log的Index
@@ -362,7 +362,7 @@ func (rf *Raft) startElection() {
 			return
 		} else if rf.isHeartBeatTimeOut() {
 			// 3.选举超时,重新开始选举
-			fmt.Printf("s[%v] election timeout, startElection now, Term:[%v]\n", rf.me, rf.CurrentTerm)
+			fmt.Printf("s[%v] election timeout, restart election now, Term:[%v]\n", rf.me, rf.CurrentTerm)
 			rf.mu.Unlock()
 			rf.startElection()
 			return
@@ -427,11 +427,11 @@ func (rf *Raft) checkCommittedLogs() {
 			rf.mu.Unlock()
 			return
 		}
-		// 如果存在一个满足 N > commitIndex 的 N，并且大多数的 matchIndex[i] ≥ N 成立，并且
-		// log[N].term == currentTerm 成立，那么令 commitIndex 等于这个 N （5.3 和 5.4 节）
+		// 如果存在一个满足N>commitIndex的N,并且大多数的matchIndex[i]≥N成立,并且log[N].term == currentTerm成立,那么令commitIndex等于这个N
 		match := make([]int, len(rf.peers))
 		copy(match, rf.matchIndex)
 		match[rf.me] = len(rf.Logs)
+		// 排序后从大到小依次寻找满足条件的N
 		sort.Ints(match)
 		last := len(rf.Logs)
 		for i := len(match) - 1; i >= 0; i-- {
@@ -462,14 +462,14 @@ func (rf *Raft) updateCommitIndex(commitIndex int) {
 	rf.commitIndex = min(commitIndex, len(rf.Logs))
 }
 
-func (rf *Raft) pushLogsToFollower(server int, startTerm int) {
+func (rf *Raft) pushLogsToFollower(server int) {
 	// 如果推送失败就要立即Retry,成为Leader时Push一次来加速同步
 	retry := true
 	for rf.killed() == false {
 		rf.mu.Lock()
-		if rf.role != Leader || rf.CurrentTerm != startTerm {
+		if rf.role != Leader {
 			// 如果不是Leader了或是任期变更了,停止推送
-			fmt.Printf("s[%v] stop push entry to s[%v] role:%v term:%v->%v\n", rf.me, server, rf.role, startTerm, rf.CurrentTerm)
+			fmt.Printf("s[%v] stop push entry to s[%v] role:%v term:%v\n", rf.me, server, rf.role, rf.CurrentTerm)
 			rf.mu.Unlock()
 			return
 		}
