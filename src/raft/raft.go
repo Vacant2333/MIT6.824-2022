@@ -132,7 +132,6 @@ func (rf *Raft) increaseTerm(term int) {
 	rf.role = Follower
 	rf.CurrentTerm = term
 	// 任期改变时Vote和lastNewEntry的信息作废
-	// todo:test init new entry
 	rf.lastNewEntryIndex = 0
 	rf.VotedFor = -1
 	rf.persist()
@@ -375,6 +374,9 @@ func (rf *Raft) applier() {
 			for index := rf.lastAppliedIndex + 1; index <= rf.commitIndex; index++ {
 				rf.Logs[index-1].CommandValid = true
 				rf.applyCh <- rf.Logs[index-1]
+				if rf.role == Leader {
+					fmt.Printf("L[%v] apply log[%v]:%v\n", rf.me, index, rf.Logs[index-1])
+				}
 			}
 			rf.lastAppliedIndex = rf.commitIndex
 			rf.persist()
@@ -628,6 +630,9 @@ func (rf *Raft) sendAppendEntries(logs []ApplyMsg, nextIndex int, server int) (b
 	if args.LeaderTerm != rf.CurrentTerm || rf.nextIndex[server] != nextIndex || rf.role != Leader {
 		ok = false
 	}
+	if reply.Success {
+		fmt.Printf("L[%v] push to s[%v] prevIndex:%v prevTerm:%v\n", rf.me, server, args.PrevLogIndex, args.PrevLogTerm)
+	}
 	return ok, reply
 }
 
@@ -713,22 +718,24 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 		args.Logs[index].CommandValid = false
 	}
 	if args.PrevLogIndex == 0 {
-		// 如果是第一条Log不校验
-		rf.Logs = args.Logs
+		if len(args.Logs) > 0 {
+			// 如果是第一条Log不校验
+			rf.Logs = args.Logs
+		}
 		reply.Success = true
 	} else if args.PrevLogIndex <= len(rf.Logs) && rf.Logs[args.PrevLogIndex-1].CommandTerm == args.PrevLogTerm {
 		// 校验正常,逐条追加,index为在Follower的Logs中的下一个Log的Index
-		for _, log := range args.Logs {
-			index := log.CommandIndex
+		for _, msg := range args.Logs {
+			index := msg.CommandIndex
 			if index <= len(rf.Logs) {
 				// 存在这条Log,如果Term相同则不做处理
-				if rf.Logs[index-1].CommandTerm != log.CommandTerm {
+				if rf.Logs[index-1].CommandTerm != msg.CommandTerm {
 					rf.Logs = rf.Logs[:index-1]
-					rf.Logs = append(rf.Logs, log)
+					rf.Logs = append(rf.Logs, msg)
 				}
 			} else {
 				// 不存在,直接追加
-				rf.Logs = append(rf.Logs, log)
+				rf.Logs = append(rf.Logs, msg)
 			}
 		}
 		reply.Success = true
@@ -752,11 +759,11 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 		reply.Success = false
 		return
 	}
+	rf.persist()
 	// 更新最后一条新Entry的下标,如果校验失败不会走到这里
 	if len(args.Logs) > 0 && args.Logs[len(args.Logs)-1].CommandIndex >= rf.commitIndex {
 		rf.lastNewEntryIndex = args.Logs[len(args.Logs)-1].CommandIndex
 	}
-	rf.persist()
 	// 更新commitIndex
 	if args.LeaderCommit > rf.commitIndex {
 		rf.updateCommitIndex(min(args.LeaderCommit, rf.lastNewEntryIndex))
