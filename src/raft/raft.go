@@ -1,22 +1,5 @@
 package raft
 
-//
-// this is an outline of the API that raft must expose to
-// the service (or tester). see comments below for
-// each of these functions for more details.
-//
-// rf = Make(...)
-//   create a new Raft server.
-// rf.Start(command interface{}) (index, term, isleader)
-//   start agreement on a new log entry
-// rf.GetState() (term, isLeader)
-//   ask a Raft for its current term, and whether it thinks it is leader
-// ApplyMsg
-//   each time a new entry is committed to the log, each Raft peer
-//   should send an ApplyMsg to the service (or tester)
-//   in the same server.
-//
-
 import (
 	"bytes"
 	"fmt"
@@ -55,9 +38,6 @@ type ApplyMsg struct {
 	SnapshotIndex int
 }
 
-// Raft
-// A Go object implementing a single Raft peer.
-//
 type Raft struct {
 	mu        sync.Mutex          // Lock to protect shared access to this peer's state
 	peers     []*labrpc.ClientEnd // RPC end points of all peers
@@ -92,11 +72,11 @@ const (
 	ElectionSleepTime = 10 * time.Millisecond  // 选举睡眠时间
 	HeartBeatSendTime = 100 * time.Millisecond // 心跳包发送时间 ms
 
-	PushLogsTime           = 15 * time.Millisecond // Leader推送Log的间隔时间
-	checkCommittedLogsTime = 25 * time.Millisecond // Leader更新CommitIndex的间隔时间
+	PushLogsTime           = 12 * time.Millisecond // Leader推送Log的间隔时间
+	checkCommittedLogsTime = 20 * time.Millisecond // Leader更新CommitIndex的间隔时间
 
-	ElectionTimeOutMin = 500 // 选举超时时间(也用于检查是否需要开始选举) 区间
-	ElectionTimeOutMax = 650
+	ElectionTimeOutMin = 300 // 选举超时时间(也用于检查是否需要开始选举) 区间
+	ElectionTimeOutMax = 400
 )
 
 func min(a int, b int) int {
@@ -276,7 +256,7 @@ func (rf *Raft) ticker() {
 		// 检查是否要开始领导选举
 		if rf.isHeartBeatTimeOut() && rf.role == Follower {
 			rf.mu.Unlock()
-			fmt.Printf("s[%v] start a election now,Term:[%v]\n", rf.me, rf.CurrentTerm)
+			fmt.Printf("s[%v] start a election now,Term:[%v] logsLen:[%v]\n", rf.me, rf.CurrentTerm, len(rf.Logs))
 			rf.startElection()
 		} else {
 			rf.mu.Unlock()
@@ -372,7 +352,7 @@ func (rf *Raft) startElection() {
 	}
 }
 
-// 获得当前已获得的选票数量,Lock的时候使用
+// Candidate,获得当前已获得的选票数量,Lock的时候使用
 func (rf *Raft) getGrantedVotes() int {
 	voteCount := 0
 	for server := 0; server < len(rf.peers); server++ {
@@ -383,7 +363,7 @@ func (rf *Raft) getGrantedVotes() int {
 	return voteCount
 }
 
-// 并行地向所有Peers收集选票
+// Candidate,并行地向所有Peers收集选票
 func (rf *Raft) collectVotes() {
 	// 向某个Server要求选票
 	askVote := func(server int, args *RequestVoteArgs) {
@@ -462,6 +442,7 @@ func (rf *Raft) updateCommitIndex(commitIndex int) {
 	rf.commitIndex = min(commitIndex, len(rf.Logs))
 }
 
+// Leader,持续推送Logs给Follower
 func (rf *Raft) pushLogsToFollower(server int) {
 	// 如果推送失败就要立即Retry,成为Leader时Push一次来加速同步
 	retry := true
@@ -530,7 +511,7 @@ func (rf *Raft) pushLogsToFollower(server int) {
 	}
 }
 
-// 给单个Follower推送新的Logs,如果nextIndex是1的话Follower无需Check,Lock的时候使用
+// Leader,给单个Follower推送新的Logs,如果nextIndex是1的话Follower无需Check,Lock的时候使用
 func (rf *Raft) sendAppendEntries(logs []ApplyMsg, nextIndex int, server int) (bool, *AppendEntriesReply) {
 	args := &AppendEnTriesArgs{
 		LeaderTerm:   rf.CurrentTerm,
@@ -548,6 +529,7 @@ func (rf *Raft) sendAppendEntries(logs []ApplyMsg, nextIndex int, server int) (b
 	rf.mu.Lock()
 	// 检查Leader状态是否改变,改变的话此条RPC作废
 	if args.LeaderTerm != rf.CurrentTerm || rf.nextIndex[server] != nextIndex || rf.role != Leader {
+		fmt.Printf("L[%v] push log to s[%v] status change! prevIndex:%v prevTerm:%v\n", rf.me, server, args.PrevLogIndex, args.PrevLogTerm)
 		ok = false
 	}
 	if reply.Success && ok {
@@ -556,7 +538,7 @@ func (rf *Raft) sendAppendEntries(logs []ApplyMsg, nextIndex int, server int) (b
 	return ok, reply
 }
 
-// 持续发送心跳包给所有人
+// Leader,持续发送心跳包给所有人
 func (rf *Raft) sendHeartBeatsToAll() {
 	// func: 发送单个心跳包给某服务器
 	sendHeartBeat := func(server int, args *AppendEnTriesArgs) bool {
@@ -603,7 +585,7 @@ func (rf *Raft) sendHeartBeatsToAll() {
 // AppendEnTriesArgs 心跳/追加包
 type AppendEnTriesArgs struct {
 	LeaderTerm   int        // Leader的Term
-	LeaderIndex  int        // Leader的Index(me)
+	LeaderIndex  int        // Leader的Index
 	PrevLogIndex int        // 新日志条目的上一个日志的索引
 	PrevLogTerm  int        // 新日志的上一个日志的任期
 	Logs         []ApplyMsg // 需要被保存的日志条目,可能有多个
@@ -683,7 +665,7 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 		return
 	}
 	// 更新最后一条新Entry的下标,如果校验失败不会走到这里
-	if len(args.Logs) > 0 && args.Logs[len(args.Logs)-1].CommandIndex >= rf.commitIndex {
+	if len(args.Logs) > 0 && args.Logs[len(args.Logs)-1].CommandIndex >= rf.lastNewEntryIndex {
 		rf.lastNewEntryIndex = args.Logs[len(args.Logs)-1].CommandIndex
 	}
 	// 更新commitIndex
