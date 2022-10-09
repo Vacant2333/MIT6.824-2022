@@ -205,6 +205,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		if reply.VoteGranted {
 			rf.heartBeatTimeOut = time.Now().Add(getRandElectionTimeOut())
 			rf.VotedFor = args.CandidateIndex
+			fmt.Printf("s[%v] vote to C[%v] Term:[%v]\n", rf.me, args.CandidateIndex, rf.CurrentTerm)
 			rf.persist()
 		}
 	}
@@ -374,7 +375,10 @@ func (rf *Raft) collectVotes() {
 		// 检查投票结果
 		rf.peersVoteGranted[server] = false
 		if ok && reply.VoteGranted {
-			rf.peersVoteGranted[server] = true
+			// 如果Term对不上(比如RPC延迟了很久)不能算入票数
+			if args.CandidateTerm == rf.CurrentTerm {
+				rf.peersVoteGranted[server] = true
+			}
 		} else if reply.FollowerTerm > rf.CurrentTerm {
 			// 如果接收到的RPC请求或响应中,任期号T>CurrentTerm,那么就令currentTerm等于T,并且切换状态为Follower
 			rf.increaseTerm(reply.FollowerTerm)
