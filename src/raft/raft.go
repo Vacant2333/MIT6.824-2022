@@ -73,7 +73,7 @@ const (
 	HeartBeatSendTime = 100 * time.Millisecond // 心跳包发送时间 ms
 
 	PushLogsTime           = 12 * time.Millisecond // Leader推送Log的间隔时间
-	checkCommittedLogsTime = 20 * time.Millisecond // Leader更新CommitIndex的间隔时间
+	checkCommittedLogsTime = 25 * time.Millisecond // Leader更新CommitIndex的间隔时间
 
 	ElectionTimeOutMin = 300 // 选举超时时间(也用于检查是否需要开始选举) 区间
 	ElectionTimeOutMax = 400
@@ -255,8 +255,8 @@ func (rf *Raft) ticker() {
 		rf.mu.Lock()
 		// 检查是否要开始领导选举
 		if rf.isHeartBeatTimeOut() && rf.role == Follower {
-			rf.mu.Unlock()
 			fmt.Printf("s[%v] start a election now,Term:[%v] logsLen:[%v]\n", rf.me, rf.CurrentTerm, len(rf.Logs))
+			rf.mu.Unlock()
 			rf.startElection()
 		} else {
 			rf.mu.Unlock()
@@ -265,7 +265,7 @@ func (rf *Raft) ticker() {
 	}
 }
 
-// Apply Logs
+// 提交Log到状态机
 func (rf *Raft) applier() {
 	for rf.killed() == false {
 		rf.mu.Lock()
@@ -450,7 +450,7 @@ func (rf *Raft) pushLogsToFollower(server int) {
 		rf.mu.Lock()
 		if rf.role != Leader {
 			// 如果不是Leader了或是任期变更了,停止推送
-			fmt.Printf("s[%v] stop push entry to s[%v] role:%v term:%v\n", rf.me, server, rf.role, rf.CurrentTerm)
+			fmt.Printf("L[%v] stop push entry to F[%v], Role:[%v] Term:[%v]\n", rf.me, server, rf.role, rf.CurrentTerm)
 			rf.mu.Unlock()
 			return
 		}
@@ -498,10 +498,10 @@ func (rf *Raft) pushLogsToFollower(server int) {
 					// Follower的日志太短了
 					rf.nextIndex[server] = pushReply.ConflictIndex
 				}
-				fmt.Printf("L[%v] change s[%v] nextIndex:[%v]->[%v]\n", rf.me, server, old, rf.nextIndex[server])
+				// 防止nextIndex被设为0,最低为1
+				rf.nextIndex[server] = max(rf.nextIndex[server], 1)
+				fmt.Printf("L[%v] change F[%v] nextIndex:[%v]->[%v] log's Term:[%v]\n", rf.me, server, old, rf.nextIndex[server], rf.Logs[rf.nextIndex[server]-1].CommandTerm)
 			}
-			// 防止nextIndex被设为0,最低为1
-			rf.nextIndex[server] = max(rf.nextIndex[server], 1)
 		}
 		rf.mu.Unlock()
 		// 如果需要重试,不等待
@@ -529,11 +529,11 @@ func (rf *Raft) sendAppendEntries(logs []ApplyMsg, nextIndex int, server int) (b
 	rf.mu.Lock()
 	// 检查Leader状态是否改变,改变的话此条RPC作废
 	if args.LeaderTerm != rf.CurrentTerm || rf.nextIndex[server] != nextIndex || rf.role != Leader {
-		fmt.Printf("L[%v] push log to s[%v] status change! prevIndex:%v prevTerm:%v\n", rf.me, server, args.PrevLogIndex, args.PrevLogTerm)
+		fmt.Printf("L[%v] push log to F[%v] status change! prevIndex:%v prevTerm:%v\n", rf.me, server, args.PrevLogIndex, args.PrevLogTerm)
 		ok = false
 	}
 	if reply.Success && ok {
-		fmt.Printf("L[%v] push to s[%v] prevIndex:%v prevTerm:%v\n", rf.me, server, args.PrevLogIndex, args.PrevLogTerm)
+		fmt.Printf("L[%v] push to F[%v] success, prevIndex:%v prevTerm:%v\n", rf.me, server, args.PrevLogIndex, args.PrevLogTerm)
 	}
 	return ok, reply
 }
@@ -630,11 +630,10 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 	} else if args.PrevLogIndex <= len(rf.Logs) && rf.Logs[args.PrevLogIndex-1].CommandTerm == args.PrevLogTerm {
 		// 校验正常,逐条追加,index为在Follower的Logs中的下一个Log的Index
 		for _, msg := range args.Logs {
-			index := msg.CommandIndex
-			if index <= len(rf.Logs) {
-				// 存在这条Log,如果Term相同则不做处理
-				if rf.Logs[index-1].CommandTerm != msg.CommandTerm {
-					rf.Logs = rf.Logs[:index-1]
+			if msg.CommandIndex <= len(rf.Logs) {
+				// 存在这条Log,如果Term相同则不做处理,不相同则删除从此条Log开始的所有Log
+				if rf.Logs[msg.CommandIndex-1].CommandTerm != msg.CommandTerm {
+					rf.Logs = rf.Logs[:msg.CommandIndex-1]
 					rf.Logs = append(rf.Logs, msg)
 				}
 			} else {
@@ -645,15 +644,14 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 		reply.Success = true
 		rf.persist()
 	} else if args.PrevLogIndex <= len(rf.Logs) && rf.Logs[args.PrevLogIndex-1].CommandTerm != args.PrevLogTerm {
-		// 发生冲突,索引相同任期不同,删除从PrevLogIndex开始之后的所有Log
+		// 发生冲突,Prev索引相同任期不同,返回冲突的任期和该任期的第一条Log的Index
 		reply.ConflictTerm = rf.Logs[args.PrevLogIndex-1].CommandTerm
-		for i := 0; i < len(rf.Logs); i++ {
-			if rf.Logs[i].CommandTerm == reply.ConflictTerm {
-				reply.ConflictIndex = i + 1
+		for index := 1; index <= len(rf.Logs); index++ {
+			if rf.Logs[index-1].CommandTerm == reply.ConflictTerm {
+				reply.ConflictIndex = index
 				break
 			}
 		}
-		rf.Logs = rf.Logs[:args.PrevLogIndex-1]
 		reply.Success = false
 		rf.persist()
 		return
