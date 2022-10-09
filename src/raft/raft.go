@@ -500,7 +500,7 @@ func (rf *Raft) pushLogsToFollower(server int) {
 				}
 				// 防止nextIndex被设为0,最低为1
 				rf.nextIndex[server] = max(rf.nextIndex[server], 1)
-				fmt.Printf("L[%v] change F[%v] nextIndex:[%v]->[%v] log's Term:[%v]\n", rf.me, server, old, rf.nextIndex[server], rf.Logs[rf.nextIndex[server]-1].CommandTerm)
+				fmt.Printf("L[%v] change F[%v] nextIndex:[%v]->[%v]\n", rf.me, server, old, rf.nextIndex[server])
 			}
 		}
 		rf.mu.Unlock()
