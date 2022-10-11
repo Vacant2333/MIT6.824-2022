@@ -14,10 +14,6 @@ import (
 	"mit6.824/labrpc"
 )
 
-// in part 2D you'll want to send other kinds of messages (e.g.,
-// snapshots) on the applyCh, but set CommandValid to false for these
-// other uses.
-//
 type ApplyMsg struct {
 	CommandValid bool
 	Command      interface{}
@@ -292,19 +288,17 @@ func (rf *Raft) ticker() {
 	}
 }
 
-// 提交Log到状态机
+// 提交Log到状态机,更新lastAppliedIndex为commitIndex
 func (rf *Raft) applier() {
 	for rf.killed() == false {
 		rf.mu.Lock()
 		rf.commitIndex = min(rf.commitIndex, len(rf.Logs))
 		if rf.commitIndex > rf.lastAppliedIndex {
 			for index := rf.lastAppliedIndex + 1; index <= rf.commitIndex; index++ {
-				if rf.Logs[index-1].CommandValid == false {
-					rf.Logs[index-1].CommandValid = true
-					rf.applyCh <- rf.Logs[index-1]
-					if rf.role == Leader {
-						fmt.Printf("L[%v] apply log[%v]:%v\n", rf.me, index, rf.Logs[index-1])
-					}
+				rf.Logs[index-1].CommandValid = true
+				rf.applyCh <- rf.Logs[index-1]
+				if rf.role == Leader {
+					fmt.Printf("L[%v] apply log[%v]:%v\n", rf.me, index, rf.Logs[index-1])
 				}
 			}
 			rf.lastAppliedIndex = rf.commitIndex
@@ -610,10 +604,6 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 	// 检查没有问题,不管是不是心跳包,更新选举超时时间
 	rf.heartBeatTimeOut = time.Now().Add(getRandElectionTimeOut())
 	rf.role = Follower
-	// Follower接受到的Logs状态设为False
-	for index := 0; index < len(args.Logs); index++ {
-		args.Logs[index].CommandValid = false
-	}
 	if args.PrevLogIndex == 0 {
 		// 如果是第一条Log不校验
 		if len(args.Logs) > 0 {
