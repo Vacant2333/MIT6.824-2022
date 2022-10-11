@@ -14,13 +14,6 @@ import (
 	"mit6.824/labrpc"
 )
 
-//
-// as each Raft peer becomes aware that successive log entries are
-// committed, the peer should send an ApplyMsg to the service (or
-// tester) on the same server, via the applyCh passed to Make(). set
-// CommandValid to true to indicate that the ApplyMsg contains a newly
-// committed log entry.
-//
 // in part 2D you'll want to send other kinds of messages (e.g.,
 // snapshots) on the applyCh, but set CommandValid to false for these
 // other uses.
@@ -64,6 +57,20 @@ type RequestVoteArgs struct {
 type RequestVoteReply struct {
 	FollowerTerm int  // 当前任期号,以便候选人更新自己的任期号
 	VoteGranted  bool // 候选人是否赢得选票
+}
+
+type InstallSnapshotArgs struct {
+	LeaderTerm       int // 领导人的任期
+	LeaderIndex      int // 领导人的下标
+	LastIncludeIndex int
+	LastIncludeTerm  int
+	Offset           int
+	Data             []byte
+	Done             bool
+}
+
+type InstallSnapshotReply struct {
+	FollowerTerm int
 }
 
 type Raft struct {
@@ -189,8 +196,6 @@ func (rf *Raft) updateCommitIndex(commitIndex int) {
 // have more recent info since it communicate the snapshot on applyCh.
 //
 func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int, snapshot []byte) bool {
-	// Your code here (2D).
-
 	return true
 }
 
