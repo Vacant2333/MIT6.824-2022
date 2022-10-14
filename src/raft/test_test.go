@@ -1141,13 +1141,17 @@ func snapcommon(t *testing.T, name string, disconnect bool, reliable bool, crash
 	leader1 := cfg.checkOneLeader()
 
 	for i := 0; i < iters; i++ {
+		fmt.Printf("\nTest: iters:[%v]\n\n", i)
+		// disconnect:False,reliable:True,crash:True
+		start := time.Now()
+
 		victim := (leader1 + 1) % servers
 		sender := leader1
 		if i%3 == 1 {
 			sender = (leader1 + 1) % servers
 			victim = leader1
 		}
-
+		fmt.Printf("Test: time_1[%v]\n", time.Now().Sub(start).Milliseconds())
 		if disconnect {
 			cfg.disconnect(victim)
 			cfg.one(rand.Int(), servers-1, true)
@@ -1156,12 +1160,14 @@ func snapcommon(t *testing.T, name string, disconnect bool, reliable bool, crash
 			cfg.crash1(victim)
 			cfg.one(rand.Int(), servers-1, true)
 		}
+		fmt.Printf("Test: time_2[%v]\n", time.Now().Sub(start).Milliseconds())
 
 		// perhaps send enough to get a snapshot
 		nn := (SnapShotInterval / 2) + (rand.Int() % SnapShotInterval)
 		for i := 0; i < nn; i++ {
 			cfg.rafts[sender].Start(rand.Int())
 		}
+		fmt.Printf("Test: time_3[%v]\n", time.Now().Sub(start).Milliseconds())
 
 		// let applier threads catch up with the Start()'s
 		if disconnect == false && crash == false {
@@ -1172,6 +1178,7 @@ func snapcommon(t *testing.T, name string, disconnect bool, reliable bool, crash
 		} else {
 			cfg.one(rand.Int(), servers-1, true)
 		}
+		fmt.Printf("Test: time_4[%v]\n", time.Now().Sub(start).Milliseconds())
 
 		if cfg.LogSize() >= MAXLOGSIZE {
 			cfg.t.Fatalf("Log size too large")
@@ -1189,16 +1196,19 @@ func snapcommon(t *testing.T, name string, disconnect bool, reliable bool, crash
 			cfg.one(rand.Int(), servers, true)
 			leader1 = cfg.checkOneLeader()
 		}
+		fmt.Printf("Test: time_5[%v]\n", time.Now().Sub(start).Milliseconds())
 	}
 	cfg.end()
 }
 
 func TestSnapshotBasic2D(t *testing.T) {
-	snapcommon(t, "Test (2D): snapshots basic", false, true, false)
+	snapcommon(t, "Test (2D): snapshots basic",
+		false, true, false)
 }
 
 func TestSnapshotInstall2D(t *testing.T) {
-	snapcommon(t, "Test (2D): install snapshots (disconnect)", true, true, false)
+	snapcommon(t, "Test (2D): install snapshots (disconnect)",
+		true, true, false)
 }
 
 func TestSnapshotInstallUnreliable2D(t *testing.T) {
@@ -1207,11 +1217,13 @@ func TestSnapshotInstallUnreliable2D(t *testing.T) {
 }
 
 func TestSnapshotInstallCrash2D(t *testing.T) {
-	snapcommon(t, "Test (2D): install snapshots (crash)", false, true, true)
+	snapcommon(t, "Test (2D): install snapshots (crash)",
+		false, true, true)
 }
 
 func TestSnapshotInstallUnCrash2D(t *testing.T) {
-	snapcommon(t, "Test (2D): install snapshots (unreliable+crash)", false, false, true)
+	snapcommon(t, "Test (2D): install snapshots (unreliable+crash)",
+		false, false, true)
 }
 
 //
