@@ -373,33 +373,31 @@ func (rf *Raft) applier() {
 		rf.mu.Lock()
 		rf.commitIndex = min(rf.commitIndex, rf.getLogsLen())
 		if rf.commitIndex > rf.lastAppliedIndex {
-			fmt.Println(rf.me, rf.Logs)
+			fmt.Println(rf.me, rf.X, rf.Logs)
 			// 有Log没有被提交上去,开始提交
 			for index := rf.lastAppliedIndex + 1; index <= rf.commitIndex; index++ {
 				var log *ApplyMsg
+
 				if index <= rf.X {
 					// 如果提交的是Snapshot的内容(index在X之前)
 					index = rf.X
-					if rf.getLog(rf.X).CommandValid == false {
-						log = &ApplyMsg{
-							SnapshotValid: true,
-							Snapshot:      rf.SnapshotData,
-							SnapshotTerm:  rf.Logs[0].CommandTerm,
-							SnapshotIndex: rf.X,
-						}
-						rf.getLog(rf.X).CommandValid = true
+					log = &ApplyMsg{
+						SnapshotValid: true,
+						Snapshot:      rf.SnapshotData,
+						SnapshotTerm:  rf.Logs[0].CommandTerm,
+						SnapshotIndex: rf.X,
 					}
-				} else if rf.getLog(index).CommandValid == false {
+				} else {
 					// 正常Apply
 					log = rf.getLog(index)
 					log.CommandValid = true
 				}
-				rf.mu.Unlock()
 				// 从2D开始applyCh会卡住,必须Unlock
 				if log != nil {
+					rf.mu.Unlock()
 					rf.applyCh <- *log
+					rf.mu.Lock()
 				}
-				rf.mu.Lock()
 				if rf.role == Leader {
 					fmt.Printf("L[%v] apply log[%v]:%v\n", rf.me, index, rf.getLog(index))
 				}
@@ -721,9 +719,6 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 	// 检查没有问题,不管是不是心跳包,更新选举超时时间
 	rf.heartBeatTimeOut = time.Now().Add(getRandElectionTimeOut())
 	rf.role = Follower
-	for i := 0; i < len(args.Logs); i++ {
-		args.Logs[i].CommandValid = false
-	}
 	if args.PrevLogIndex < rf.X && rf.X != 0 {
 		// 如果Leader校验的Index在Follower的X之前,直接要求Leader发送Snapshot
 		reply.Success = false
@@ -779,7 +774,7 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 	if len(args.Logs) > 0 && args.Logs[len(args.Logs)-1].CommandIndex >= rf.lastNewEntryIndex {
 		rf.lastNewEntryIndex = args.Logs[len(args.Logs)-1].CommandIndex
 	}
-	// 更新commitIndex todo:第二个需要吗?
+	// 更新commitIndex
 	if args.LeaderCommit > rf.commitIndex && rf.lastNewEntryIndex > rf.commitIndex {
 		rf.updateCommitIndex(min(args.LeaderCommit, rf.lastNewEntryIndex))
 	}
