@@ -142,12 +142,6 @@ func (rf *Raft) getLogsLen() int {
 
 // 获得某条Log,-1为最后一条
 func (rf *Raft) getLog(index int) *ApplyMsg {
-	if rf.X > 0 {
-		//fmt.Printf("s[%v] getLog[%v] logsLen(new):[%v] X:[%v] len:[%v]\n", rf.me, index, len(rf.Logs), rf.X, rf.Logs[len(rf.Logs)-1].CommandIndex)
-		//fmt.Println(rf.Logs)
-	} else {
-		//fmt.Printf("s[%v] getLog[%v] logsLen(new):[%v] X:[%v] len:[%v]\n", rf.me, index, len(rf.Logs), rf.X, rf.Logs[len(rf.Logs)-1].CommandIndex)
-	}
 	if index == -1 {
 		return &rf.Logs[len(rf.Logs)-1]
 	} else if rf.X != 0 {
@@ -205,14 +199,13 @@ func (rf *Raft) readPersist(data []byte) {
 			rf.SnapshotData = SnapshotData
 			rf.X = rf.Logs[0].CommandIndex
 		}
-		fmt.Printf("s[%v] readPersist logsLen:[%v] Term:[%v] X:[%v]\n", rf.me, len(logs), rf.CurrentTerm, rf.X)
+		fmt.Printf("s[%v] readPersist logsLen:[%v] Term:[%v] X:[%v] %v\n", rf.me, len(logs), rf.CurrentTerm, rf.X, time.Now())
 	}
 }
 
 // 更新自己的commitIndex,用之前先检查,并且要Lock
 func (rf *Raft) updateCommitIndex(commitIndex int) {
 	fmt.Printf("s[%v] update commitIndex [%v]->[%v] logsLen:[%v]\n", rf.me, rf.commitIndex, commitIndex, rf.getLogsLen())
-	//rf.commitIndex = max(min(commitIndex, rf.getLogsLen()), rf.getLogsLen())
 	rf.commitIndex = min(commitIndex, rf.getLogsLen())
 }
 
@@ -247,13 +240,12 @@ func (rf *Raft) sendInstallSnapshot(server int) bool {
 	rf.mu.Unlock()
 	ok := rf.peers[server].Call("Raft.InstallSnapshot", args, reply)
 	rf.mu.Lock()
-	// 如果接收到的RPC请求或响应中,任期号T>CurrentTerm,那么就令currentTerm等于T,并且切换状态为Follower
 	if reply.FollowerTerm > rf.CurrentTerm {
+		// 如果接收到的RPC请求或响应中,任期号T>CurrentTerm,那么就令currentTerm等于T,并且切换状态为Follower
 		rf.increaseTerm(reply.FollowerTerm)
 		ok = false
-	}
-	// 状态如果变更,请求作废
-	if args.LeaderTerm != rf.CurrentTerm || rf.X != args.LastIncludeIndex {
+	} else if args.LeaderTerm != rf.CurrentTerm || rf.X != args.LastIncludeIndex {
+		// 状态如果变更,请求作废
 		ok = false
 	}
 	if ok {
@@ -395,7 +387,10 @@ func (rf *Raft) applier() {
 				// 从2D开始applyCh会卡住,必须Unlock
 				if log != nil {
 					rf.mu.Unlock()
+					// todo:apply time
+					//start := time.Now()
 					rf.applyCh <- *log
+					//fmt.Printf("s[%v] apply[%v] time:[%vms]\n", rf.me, index, time.Now().Sub(start).Milliseconds())
 					rf.mu.Lock()
 				}
 				if rf.role == Leader {
@@ -559,9 +554,10 @@ func (rf *Raft) pushLogsToFollower(server int) {
 			return
 		}
 		if rf.getLogsLen() >= rf.nextIndex[server] || retry {
-			fmt.Printf("L[%v] push to F[%v]\n", rf.me, server)
+			start := time.Now()
+			fmt.Printf("L[%v] push to F[%v] time:[%v]\n", rf.me, server, time.Now())
 			nextIndex := rf.nextIndex[server]
-			if nextIndex <= rf.X && rf.X != 0 {
+			if nextIndex <= rf.X {
 				fmt.Printf("L[%v] push Snapshot to s[%v]\n", rf.me, server)
 				// Leader没有用于同步的Log,推送Snapshot,第X条Log只能用于校验,其内容在Snapshot里
 				ok := rf.sendInstallSnapshot(server)
@@ -629,6 +625,7 @@ func (rf *Raft) pushLogsToFollower(server int) {
 					fmt.Printf("L[%v] change F[%v] nextIndex:[%v]->[%v]\n", rf.me, server, nextIndex, rf.nextIndex[server])
 				}
 			}
+			fmt.Printf("L[%v] push log to s[%v] time:[%vms]\n", rf.me, server, time.Now().Sub(start).Milliseconds())
 		}
 		rf.mu.Unlock()
 		// 如果需要重试,不等待

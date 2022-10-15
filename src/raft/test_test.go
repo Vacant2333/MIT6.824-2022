@@ -1151,7 +1151,6 @@ func snapcommon(t *testing.T, name string, disconnect bool, reliable bool, crash
 			sender = (leader1 + 1) % servers
 			victim = leader1
 		}
-		fmt.Printf("Test: time_1[%v]\n", time.Now().Sub(start).Milliseconds())
 		if disconnect {
 			cfg.disconnect(victim)
 			cfg.one(rand.Int(), servers-1, true)
@@ -1160,14 +1159,14 @@ func snapcommon(t *testing.T, name string, disconnect bool, reliable bool, crash
 			cfg.crash1(victim)
 			cfg.one(rand.Int(), servers-1, true)
 		}
-		fmt.Printf("Test: time_2[%v]\n", time.Now().Sub(start).Milliseconds())
+		fmt.Printf("Test: time_1[%vms]\n", time.Now().Sub(start).Milliseconds())
 
 		// perhaps send enough to get a snapshot
 		nn := (SnapShotInterval / 2) + (rand.Int() % SnapShotInterval)
 		for i := 0; i < nn; i++ {
 			cfg.rafts[sender].Start(rand.Int())
 		}
-		fmt.Printf("Test: time_3[%v]\n", time.Now().Sub(start).Milliseconds())
+		fmt.Printf("Test: time_2[%vms]\n", time.Now().Sub(start).Milliseconds())
 
 		// let applier threads catch up with the Start()'s
 		if disconnect == false && crash == false {
@@ -1178,7 +1177,7 @@ func snapcommon(t *testing.T, name string, disconnect bool, reliable bool, crash
 		} else {
 			cfg.one(rand.Int(), servers-1, true)
 		}
-		fmt.Printf("Test: time_4[%v]\n", time.Now().Sub(start).Milliseconds())
+		fmt.Printf("Test: time_3[%vms]\n", time.Now().Sub(start).Milliseconds())
 
 		if cfg.LogSize() >= MAXLOGSIZE {
 			cfg.t.Fatalf("Log size too large")
@@ -1196,7 +1195,7 @@ func snapcommon(t *testing.T, name string, disconnect bool, reliable bool, crash
 			cfg.one(rand.Int(), servers, true)
 			leader1 = cfg.checkOneLeader()
 		}
-		fmt.Printf("Test: time_5[%v]\n", time.Now().Sub(start).Milliseconds())
+		fmt.Printf("Test: time_4[%vms]\n", time.Now().Sub(start).Milliseconds())
 	}
 	cfg.end()
 }
