@@ -304,6 +304,10 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 			rf.heartBeatTimeOut = time.Now().Add(getRandElectionTimeOut())
 			rf.VotedFor = args.CandidateIndex
 			rf.persist()
+			if rf.getLogsLen() > 0 {
+				fmt.Printf("s[%v] vote to C[%v] args:[%v] lastLog:[%v]\n", rf.me, args.CandidateIndex, args, rf.getLog(-1))
+			}
+			fmt.Printf("s[%v] vote to C[%v] args:[%v]\n", rf.me, args.CandidateIndex, args)
 		}
 	}
 }
@@ -428,7 +432,10 @@ func (rf *Raft) startElection() {
 			return
 		} else if voteCount > len(rf.peers)/2 {
 			// 2.赢得了大部分选票,成为Leader
-			fmt.Printf("L[%v] is a Leader now, Term:[%v]\n", rf.me, rf.CurrentTerm)
+			if rf.getLogsLen() > 0 {
+				fmt.Printf("L[%v] is a Leader now, Term:[%v] votes:[%v] lastLog:[%v]\n", rf.me, rf.CurrentTerm, rf.peersVoteGranted, rf.getLog(-1))
+			}
+			//fmt.Printf("L[%v] is a Leader now, Term:[%v] votes:[%v]\n", rf.me, rf.CurrentTerm, rf.peersVoteGranted)
 			rf.role = Leader
 			// 初始化Leader需要的内容
 			rf.nextIndex = make([]int, len(rf.peers))
@@ -444,7 +451,7 @@ func (rf *Raft) startElection() {
 			rf.mu.Unlock()
 			// 持续向所有Peers发送心跳包,以及检查是否要提交Logs
 			go rf.sendHeartBeatsToAll(rf.CurrentTerm)
-			go rf.checkCommittedLogs()
+			go rf.checkCommittedLogs(rf.CurrentTerm)
 			return
 		} else if rf.isHeartBeatTimeOut() {
 			// 3.选举超时,重新开始选举
@@ -504,10 +511,10 @@ func (rf *Raft) collectVotes() {
 }
 
 // Leader,检查是否可以更新commitIndex
-func (rf *Raft) checkCommittedLogs() {
+func (rf *Raft) checkCommittedLogs(startTerm int) {
 	for rf.killed() == false {
 		rf.mu.Lock()
-		if rf.role != Leader {
+		if rf.CurrentTerm != startTerm {
 			rf.mu.Unlock()
 			return
 		}
@@ -538,7 +545,7 @@ func (rf *Raft) checkCommittedLogs() {
 func (rf *Raft) pushLogsToFollower(server int, startTerm int) {
 	for rf.killed() == false {
 		rf.mu.Lock()
-		if rf.role != Leader || startTerm != rf.CurrentTerm {
+		if startTerm != rf.CurrentTerm {
 			// 如果不是Leader了,停止推送Logs
 			fmt.Printf("L[%v] stop push entry to F[%v], Role:[%v] Term:[%v] startTerm:[%v]\n", rf.me, server, rf.role, rf.CurrentTerm, startTerm)
 			rf.mu.Unlock()
@@ -546,7 +553,7 @@ func (rf *Raft) pushLogsToFollower(server int, startTerm int) {
 		}
 		if rf.getLogsLen() >= rf.nextIndex[server] {
 			rf.mu.Unlock()
-			go rf.pushLog(server)
+			go rf.pushLog(server, startTerm)
 		} else {
 			rf.mu.Unlock()
 		}
@@ -554,9 +561,12 @@ func (rf *Raft) pushLogsToFollower(server int, startTerm int) {
 	}
 }
 
-func (rf *Raft) pushLog(server int) {
+func (rf *Raft) pushLog(server int, startTerm int) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	if startTerm != rf.CurrentTerm {
+		return
+	}
 	nextIndex := rf.nextIndex[server]
 	if nextIndex <= rf.X {
 		fmt.Printf("L[%v] push Snapshot to s[%v]\n", rf.me, server)
@@ -659,7 +669,7 @@ func (rf *Raft) sendHeartBeatsToAll(startTerm int) {
 	// 发送心跳包,直到自己不为Leader,或Term改变
 	for rf.killed() == false {
 		rf.mu.Lock()
-		if rf.role != Leader || rf.CurrentTerm != startTerm {
+		if rf.CurrentTerm != startTerm {
 			// 如果现在不是Leader,停止发送心跳包
 			rf.mu.Unlock()
 			return
@@ -691,6 +701,9 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 	defer rf.mu.Unlock()
 	reply.FollowerTerm = rf.CurrentTerm
 	if args.LeaderTerm > rf.CurrentTerm {
+		if rf.role == Leader {
+			fmt.Printf("s[%v] trans to Follower by args:%v\n", rf.me, args)
+		}
 		// 如果接收到的RPC请求或响应中,任期号T>CurrentTerm,那么就令currentTerm等于T,并且切换状态为Follower
 		rf.increaseTerm(args.LeaderTerm)
 	} else if args.LeaderTerm < rf.CurrentTerm || rf.role == Leader {
@@ -700,9 +713,6 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 	}
 	// 检查没有问题,不管是不是心跳包,更新选举超时时间
 	rf.heartBeatTimeOut = time.Now().Add(getRandElectionTimeOut())
-	if rf.role == Leader {
-		fmt.Printf("s[%v] trans to Follower by args:%v\n", rf.me, args)
-	}
 	//rf.role = Follower
 	if args.PrevLogIndex < rf.X && rf.X != 0 {
 		// 如果Leader校验的Index在Follower的X之前,直接要求Leader发送Snapshot
