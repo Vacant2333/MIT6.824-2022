@@ -693,8 +693,8 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 	if args.LeaderTerm > rf.CurrentTerm {
 		// 如果接收到的RPC请求或响应中,任期号T>CurrentTerm,那么就令currentTerm等于T,并且切换状态为Follower
 		rf.increaseTerm(args.LeaderTerm)
-	} else if args.LeaderTerm < rf.CurrentTerm {
-		// 不正常的包,Leader的Term小于Follower的Term
+	} else if args.LeaderTerm < rf.CurrentTerm || rf.role == Leader {
+		// 不正常的包,Leader的Term不大于Follower的Term
 		reply.Success = false
 		return
 	}
@@ -703,7 +703,7 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 	if rf.role == Leader {
 		fmt.Printf("s[%v] trans to Follower by args:%v\n", rf.me, args)
 	}
-	rf.role = Follower
+	//rf.role = Follower
 	if args.PrevLogIndex < rf.X && rf.X != 0 {
 		// 如果Leader校验的Index在Follower的X之前,直接要求Leader发送Snapshot
 		reply.Success = false
