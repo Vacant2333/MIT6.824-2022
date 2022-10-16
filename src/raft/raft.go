@@ -96,13 +96,13 @@ const (
 	Candidate = 2
 	Leader    = 3
 
-	TickerSleepTime   = 55 * time.Millisecond  // Ticker 睡眠时间 ms
+	TickerSleepTime   = 60 * time.Millisecond  // Ticker 睡眠时间 ms
 	ApplierSleepTime  = 30 * time.Millisecond  // Applier睡眠时间
-	ElectionSleepTime = 15 * time.Millisecond  // 选举睡眠时间
-	HeartBeatSendTime = 105 * time.Millisecond // 心跳包发送时间 ms
+	ElectionSleepTime = 25 * time.Millisecond  // 选举睡眠时间
+	HeartBeatSendTime = 115 * time.Millisecond // 心跳包发送时间 ms
 
-	PushLogsTime           = 40 * time.Millisecond // Leader推送Log的间隔时间
-	checkCommittedLogsTime = 50 * time.Millisecond // Leader更新CommitIndex的间隔时间
+	PushLogsTime           = 50 * time.Millisecond // Leader推送Log的间隔时间
+	checkCommittedLogsTime = 60 * time.Millisecond // Leader更新CommitIndex的间隔时间
 
 	ElectionTimeOutMin = 300 // 选举超时时间(也用于检查是否需要开始选举) 区间
 	ElectionTimeOutMax = 400
@@ -244,7 +244,8 @@ func (rf *Raft) sendInstallSnapshot(server int) bool {
 		// 如果接收到的RPC请求或响应中,任期号T>CurrentTerm,那么就令currentTerm等于T,并且切换状态为Follower
 		rf.increaseTerm(reply.FollowerTerm)
 		ok = false
-	} else if args.LeaderTerm != rf.CurrentTerm || rf.X != args.LastIncludeIndex {
+	}
+	if args.LeaderTerm != rf.CurrentTerm || rf.X != args.LastIncludeIndex {
 		// 状态如果变更,请求作废
 		ok = false
 	}
@@ -257,8 +258,8 @@ func (rf *Raft) sendInstallSnapshot(server int) bool {
 // InstallSnapshot Follower,接收Leader发来的Snapshot
 func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapshotReply) {
 	rf.mu.Lock()
-	// 如果接收到的RPC请求或响应中,任期号T>CurrentTerm,那么就令currentTerm等于T,并且切换状态为Follower
 	if args.LeaderTerm > rf.CurrentTerm {
+		// 如果接收到的RPC请求或响应中,任期号T>CurrentTerm,那么就令currentTerm等于T,并且切换状态为Follower
 		rf.increaseTerm(args.LeaderTerm)
 	}
 	reply.FollowerTerm = rf.CurrentTerm
@@ -281,8 +282,8 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	// 如果接收到的RPC请求或响应中,任期号T>CurrentTerm,那么就令currentTerm等于T,并且切换状态为Follower
 	if args.CandidateTerm > rf.CurrentTerm {
+		// 如果接收到的RPC请求或响应中,任期号T>CurrentTerm,那么就令currentTerm等于T,并且切换状态为Follower
 		rf.increaseTerm(args.CandidateTerm)
 	}
 	reply.FollowerTerm = rf.CurrentTerm
@@ -437,12 +438,12 @@ func (rf *Raft) startElection() {
 					// 初始化nextIndex为Leader的最后条目索引+1
 					rf.nextIndex[server] = rf.getLogsLen() + 1
 					// 持续通过检查matchIndex给Follower发送新的Log
-					go rf.pushLogsToFollower(server)
+					go rf.pushLogsToFollower(server, rf.CurrentTerm)
 				}
 			}
 			rf.mu.Unlock()
 			// 持续向所有Peers发送心跳包,以及检查是否要提交Logs
-			go rf.sendHeartBeatsToAll()
+			go rf.sendHeartBeatsToAll(rf.CurrentTerm)
 			go rf.checkCommittedLogs()
 			return
 		} else if rf.isHeartBeatTimeOut() {
@@ -476,15 +477,12 @@ func (rf *Raft) collectVotes() {
 		ok := rf.sendRequestVote(server, args, reply)
 		rf.mu.Lock()
 		defer rf.mu.Unlock()
-		// 检查投票结果
-		rf.peersVoteGranted[server] = false
-		// 如果Term对不上(比如RPC延迟了很久)不能算入票数
-		if ok && reply.VoteGranted && args.CandidateTerm == rf.CurrentTerm {
-			rf.peersVoteGranted[server] = true
-		} else if reply.FollowerTerm > rf.CurrentTerm {
+		if reply.FollowerTerm > rf.CurrentTerm {
 			// 如果接收到的RPC请求或响应中,任期号T>CurrentTerm,那么就令currentTerm等于T,并且切换状态为Follower
 			rf.increaseTerm(reply.FollowerTerm)
 		}
+		// 如果Term对不上(比如RPC延迟了很久)不能算入票数
+		rf.peersVoteGranted[server] = ok && reply.VoteGranted && args.CandidateTerm == rf.CurrentTerm
 	}
 	// args保持一致
 	rf.mu.Lock()
@@ -537,12 +535,12 @@ func (rf *Raft) checkCommittedLogs() {
 }
 
 // Leader,持续推送Logs给Follower
-func (rf *Raft) pushLogsToFollower(server int) {
+func (rf *Raft) pushLogsToFollower(server int, startTerm int) {
 	for rf.killed() == false {
 		rf.mu.Lock()
-		if rf.role != Leader {
+		if rf.role != Leader || startTerm != rf.CurrentTerm {
 			// 如果不是Leader了,停止推送Logs
-			fmt.Printf("L[%v] stop push entry to F[%v], Role:[%v] Term:[%v]\n", rf.me, server, rf.role, rf.CurrentTerm)
+			fmt.Printf("L[%v] stop push entry to F[%v], Role:[%v] Term:[%v] startTerm:[%v]\n", rf.me, server, rf.role, rf.CurrentTerm, startTerm)
 			rf.mu.Unlock()
 			return
 		}
@@ -637,7 +635,8 @@ func (rf *Raft) sendAppendEntries(logs []ApplyMsg, nextIndex int, server int) (b
 		// 如果接收到的RPC请求或响应中,任期号T>CurrentTerm,那么就令currentTerm等于T,并且切换状态为Follower
 		rf.increaseTerm(reply.FollowerTerm)
 	}
-	if args.LeaderTerm != rf.CurrentTerm || rf.nextIndex[server] != nextIndex || rf.role != Leader {
+	//if args.LeaderTerm != rf.CurrentTerm || rf.nextIndex[server] != nextIndex || rf.role != Leader {
+	if args.LeaderTerm != rf.CurrentTerm || rf.role != Leader {
 		// Leader状态改变,此条RPC作废
 		ok = false
 	}
@@ -645,7 +644,7 @@ func (rf *Raft) sendAppendEntries(logs []ApplyMsg, nextIndex int, server int) (b
 }
 
 // Leader,持续发送心跳包给所有人
-func (rf *Raft) sendHeartBeatsToAll() {
+func (rf *Raft) sendHeartBeatsToAll(startTerm int) {
 	// 发送单个心跳包给某服务器
 	sendHeartBeat := func(server int, args *AppendEnTriesArgs) {
 		reply := &AppendEntriesReply{}
@@ -657,10 +656,10 @@ func (rf *Raft) sendHeartBeatsToAll() {
 			rf.increaseTerm(reply.FollowerTerm)
 		}
 	}
-	// 发送心跳包,直到自己不为Leader
+	// 发送心跳包,直到自己不为Leader,或Term改变
 	for rf.killed() == false {
 		rf.mu.Lock()
-		if rf.role != Leader {
+		if rf.role != Leader || rf.CurrentTerm != startTerm {
 			// 如果现在不是Leader,停止发送心跳包
 			rf.mu.Unlock()
 			return
@@ -701,6 +700,9 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 	}
 	// 检查没有问题,不管是不是心跳包,更新选举超时时间
 	rf.heartBeatTimeOut = time.Now().Add(getRandElectionTimeOut())
+	if rf.role == Leader {
+		fmt.Printf("s[%v] trans to Follower by args:%v\n", rf.me, args)
+	}
 	rf.role = Follower
 	if args.PrevLogIndex < rf.X && rf.X != 0 {
 		// 如果Leader校验的Index在Follower的X之前,直接要求Leader发送Snapshot
