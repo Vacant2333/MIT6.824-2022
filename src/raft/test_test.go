@@ -8,9 +8,7 @@ package raft
 // test with the original before submitting.
 //
 
-import (
-	"testing"
-)
+import "testing"
 import "fmt"
 import "time"
 import "math/rand"
@@ -21,7 +19,6 @@ import "sync"
 // (much more than the paper's range of timeouts).
 const RaftElectionTimeout = 1000 * time.Millisecond
 
-// 2A.1
 func TestInitialElection2A(t *testing.T) {
 	servers := 3
 	cfg := make_config(t, servers, false, false)
@@ -53,7 +50,6 @@ func TestInitialElection2A(t *testing.T) {
 	cfg.end()
 }
 
-// 2A.2
 func TestReElection2A(t *testing.T) {
 	servers := 3
 	cfg := make_config(t, servers, false, false)
@@ -94,7 +90,6 @@ func TestReElection2A(t *testing.T) {
 	cfg.end()
 }
 
-// 2A.3
 func TestManyElections2A(t *testing.T) {
 	servers := 7
 	cfg := make_config(t, servers, false, false)
@@ -106,7 +101,6 @@ func TestManyElections2A(t *testing.T) {
 
 	iters := 10
 	for ii := 1; ii < iters; ii++ {
-		fmt.Printf("2A.3 test round[%v] start\n", ii)
 		// disconnect three nodes
 		i1 := rand.Int() % servers
 		i2 := rand.Int() % servers
@@ -122,7 +116,6 @@ func TestManyElections2A(t *testing.T) {
 		cfg.connect(i1)
 		cfg.connect(i2)
 		cfg.connect(i3)
-
 	}
 
 	cfg.checkOneLeader()
@@ -143,6 +136,7 @@ func TestBasicAgree2B(t *testing.T) {
 		if nd > 0 {
 			t.Fatalf("some have committed before Start()")
 		}
+
 		xindex := cfg.one(index*100, servers, false)
 		if xindex != index {
 			t.Fatalf("got index %v but expected %v", xindex, index)
@@ -292,7 +286,7 @@ func TestFailAgree2B(t *testing.T) {
 	// disconnect one follower from the network.
 	leader := cfg.checkOneLeader()
 	cfg.disconnect((leader + 1) % servers)
-	fmt.Printf("Test: disconnect s[%v]\n", (leader+1)%servers)
+
 	// the leader and remaining follower should be
 	// able to agree despite the disconnected follower.
 	cfg.one(102, servers-1, false)
@@ -303,7 +297,7 @@ func TestFailAgree2B(t *testing.T) {
 
 	// re-connect
 	cfg.connect((leader + 1) % servers)
-	fmt.Printf("Test: reconnect s[%v]\n", (leader+1)%servers)
+
 	// the full set of servers should preserve
 	// previous agreements, and be able to agree
 	// on new commands.
@@ -478,7 +472,6 @@ func TestRejoin2B(t *testing.T) {
 	// leader network failure
 	leader1 := cfg.checkOneLeader()
 	cfg.disconnect(leader1)
-	fmt.Printf("Test: disconnect1 s[%v]\n", leader1)
 
 	// make old leader try to agree on some entries
 	cfg.rafts[leader1].Start(102)
@@ -491,18 +484,14 @@ func TestRejoin2B(t *testing.T) {
 	// new leader network failure
 	leader2 := cfg.checkOneLeader()
 	cfg.disconnect(leader2)
-	fmt.Printf("Test: disconnect2 s[%v]\n", leader2)
 
 	// old leader connected again
 	cfg.connect(leader1)
-	fmt.Printf("Test: reconnect1 s[%v]\n", leader1)
 
-	fmt.Printf("Test: disconnect 1:[%v] 2:[%v]\n", leader1, leader2)
 	cfg.one(104, 2, true)
 
 	// all together now
 	cfg.connect(leader2)
-	fmt.Printf("Test: reconnect2 s[%v]\n", leader2)
 
 	cfg.one(105, servers, true)
 
@@ -514,7 +503,7 @@ func TestBackup2B(t *testing.T) {
 	cfg := make_config(t, servers, false, false)
 	defer cfg.cleanup()
 
-	cfg.begin("Test (2B): leader backs up quickly over incorrect follower Logs")
+	cfg.begin("Test (2B): leader backs up quickly over incorrect follower logs")
 
 	cfg.one(rand.Int(), servers, true)
 
@@ -627,7 +616,7 @@ loop:
 			cmds = append(cmds, x)
 			index1, term1, ok := cfg.rafts[leader].Start(x)
 			if term1 != term {
-				// FollowerTerm changed while starting
+				// Term changed while starting
 				continue loop
 			}
 			if !ok {
@@ -691,7 +680,6 @@ loop:
 	cfg.end()
 }
 
-// 2C start
 func TestPersist12C(t *testing.T) {
 	servers := 3
 	cfg := make_config(t, servers, false, false)
@@ -721,11 +709,9 @@ func TestPersist12C(t *testing.T) {
 
 	leader2 := cfg.checkOneLeader()
 	cfg.disconnect(leader2)
-	fmt.Println("Test: disconnect ", leader2)
 	cfg.one(14, servers-1, true)
 	cfg.start1(leader2, cfg.applier)
 	cfg.connect(leader2)
-	fmt.Println("Test: connect ", leader2)
 
 	cfg.wait(4, servers, -1) // wait for leader2 to join before killing i3
 
@@ -832,11 +818,11 @@ func TestFigure82C(t *testing.T) {
 	defer cfg.cleanup()
 
 	cfg.begin("Test (2C): Figure 8")
+
 	cfg.one(rand.Int(), 1, true)
 
 	nup := servers
 	for iters := 0; iters < 1000; iters++ {
-		//fmt.Println("Test Figure8: iters:", iters)
 		leader := -1
 		for i := 0; i < servers; i++ {
 			if cfg.rafts[i] != nil {
@@ -850,16 +836,13 @@ func TestFigure82C(t *testing.T) {
 		if (rand.Int() % 1000) < 100 {
 			ms := rand.Int63() % (int64(RaftElectionTimeout/time.Millisecond) / 2)
 			time.Sleep(time.Duration(ms) * time.Millisecond)
-			fmt.Printf("Test: sleep %vms\n", ms)
 		} else {
 			ms := (rand.Int63() % 13)
 			time.Sleep(time.Duration(ms) * time.Millisecond)
-			fmt.Printf("Test: sleep %vms\n", ms)
 		}
 
 		if leader != -1 {
 			cfg.crash1(leader)
-			fmt.Printf("Test: crash s[%v] nup:[%v]\n", leader, nup)
 			nup -= 1
 		}
 
@@ -868,19 +851,18 @@ func TestFigure82C(t *testing.T) {
 			if cfg.rafts[s] == nil {
 				cfg.start1(s, cfg.applier)
 				cfg.connect(s)
-				fmt.Printf("Test: connect s[%v] nup:[%v]\n", s, nup+1)
 				nup += 1
 			}
 		}
 	}
-	fmt.Println("---connect")
+
 	for i := 0; i < servers; i++ {
 		if cfg.rafts[i] == nil {
 			cfg.start1(i, cfg.applier)
 			cfg.connect(i)
 		}
 	}
-	fmt.Println("---one")
+
 	cfg.one(rand.Int(), servers, true)
 
 	cfg.end()
@@ -929,7 +911,6 @@ func TestFigure8Unreliable2C(t *testing.T) {
 		if iters == 200 {
 			cfg.setlongreordering(true)
 		}
-		fmt.Println("Test: F8 unreliable iters:", iters)
 		leader := -1
 		for i := 0; i < servers; i++ {
 			_, _, ok := cfg.rafts[i].Start(rand.Int() % 10000)
@@ -941,11 +922,9 @@ func TestFigure8Unreliable2C(t *testing.T) {
 		if (rand.Int() % 1000) < 100 {
 			ms := rand.Int63() % (int64(RaftElectionTimeout/time.Millisecond) / 2)
 			time.Sleep(time.Duration(ms) * time.Millisecond)
-			fmt.Printf("Test F8 sleep %vms\n", ms)
 		} else {
 			ms := (rand.Int63() % 13)
 			time.Sleep(time.Duration(ms) * time.Millisecond)
-			fmt.Printf("Test F8 sleep %vms\n", ms)
 		}
 
 		if leader != -1 && (rand.Int()%1000) < int(RaftElectionTimeout/time.Millisecond)/2 {
@@ -960,15 +939,14 @@ func TestFigure8Unreliable2C(t *testing.T) {
 				nup += 1
 			}
 		}
-		fmt.Println("Test: F8 unreliable connected:", cfg.connected, "nup:", nup)
 	}
-	fmt.Println("Test: F8 unreliable connectAll")
+
 	for i := 0; i < servers; i++ {
 		if cfg.connected[i] == false {
 			cfg.connect(i)
 		}
 	}
-	fmt.Println("Test: F8 unreliable one start")
+
 	cfg.one(rand.Int()%10000, servers, true)
 
 	cfg.end()
@@ -1141,16 +1119,13 @@ func snapcommon(t *testing.T, name string, disconnect bool, reliable bool, crash
 	leader1 := cfg.checkOneLeader()
 
 	for i := 0; i < iters; i++ {
-		fmt.Printf("\nTest: iters:[%v]\n\n", i)
-		// disconnect:False,reliable:True,crash:True
-		start := time.Now()
-
 		victim := (leader1 + 1) % servers
 		sender := leader1
 		if i%3 == 1 {
 			sender = (leader1 + 1) % servers
 			victim = leader1
 		}
+
 		if disconnect {
 			cfg.disconnect(victim)
 			cfg.one(rand.Int(), servers-1, true)
@@ -1159,14 +1134,12 @@ func snapcommon(t *testing.T, name string, disconnect bool, reliable bool, crash
 			cfg.crash1(victim)
 			cfg.one(rand.Int(), servers-1, true)
 		}
-		fmt.Printf("Test: time_1[%vms]\n", time.Now().Sub(start).Milliseconds())
 
 		// perhaps send enough to get a snapshot
 		nn := (SnapShotInterval / 2) + (rand.Int() % SnapShotInterval)
 		for i := 0; i < nn; i++ {
 			cfg.rafts[sender].Start(rand.Int())
 		}
-		fmt.Printf("Test: time_2[%vms]\n", time.Now().Sub(start).Milliseconds())
 
 		// let applier threads catch up with the Start()'s
 		if disconnect == false && crash == false {
@@ -1177,7 +1150,6 @@ func snapcommon(t *testing.T, name string, disconnect bool, reliable bool, crash
 		} else {
 			cfg.one(rand.Int(), servers-1, true)
 		}
-		fmt.Printf("Test: time_3[%vms]\n", time.Now().Sub(start).Milliseconds())
 
 		if cfg.LogSize() >= MAXLOGSIZE {
 			cfg.t.Fatalf("Log size too large")
@@ -1195,19 +1167,16 @@ func snapcommon(t *testing.T, name string, disconnect bool, reliable bool, crash
 			cfg.one(rand.Int(), servers, true)
 			leader1 = cfg.checkOneLeader()
 		}
-		fmt.Printf("Test: time_4[%vms]\n", time.Now().Sub(start).Milliseconds())
 	}
 	cfg.end()
 }
 
 func TestSnapshotBasic2D(t *testing.T) {
-	snapcommon(t, "Test (2D): snapshots basic",
-		false, true, false)
+	snapcommon(t, "Test (2D): snapshots basic", false, true, false)
 }
 
 func TestSnapshotInstall2D(t *testing.T) {
-	snapcommon(t, "Test (2D): install snapshots (disconnect)",
-		true, true, false)
+	snapcommon(t, "Test (2D): install snapshots (disconnect)", true, true, false)
 }
 
 func TestSnapshotInstallUnreliable2D(t *testing.T) {
@@ -1216,13 +1185,11 @@ func TestSnapshotInstallUnreliable2D(t *testing.T) {
 }
 
 func TestSnapshotInstallCrash2D(t *testing.T) {
-	snapcommon(t, "Test (2D): install snapshots (crash)",
-		false, true, true)
+	snapcommon(t, "Test (2D): install snapshots (crash)", false, true, true)
 }
 
 func TestSnapshotInstallUnCrash2D(t *testing.T) {
-	snapcommon(t, "Test (2D): install snapshots (unreliable+crash)",
-		false, false, true)
+	snapcommon(t, "Test (2D): install snapshots (unreliable+crash)", false, false, true)
 }
 
 //
