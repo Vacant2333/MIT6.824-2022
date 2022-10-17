@@ -2,8 +2,6 @@ package raft
 
 import (
 	"bytes"
-	"fmt"
-	"math/rand"
 	"mit6.824/labgob"
 	"mit6.824/labrpc"
 	"sort"
@@ -89,6 +87,8 @@ type Raft struct {
 }
 
 const (
+	Debug = false
+
 	Follower  = 1
 	Candidate = 2
 	Leader    = 3
@@ -105,31 +105,12 @@ const (
 	ElectionTimeOutMax = 400
 )
 
-func min(a int, b int) int {
-	if a <= b {
-		return a
-	}
-	return b
-}
-
-func max(a int, b int) int {
-	if a >= b {
-		return a
-	}
-	return b
-}
-
-// 获得一个随机选举超时时间
-func getRandElectionTimeOut() time.Duration {
-	return time.Duration((rand.Int()%(ElectionTimeOutMax-ElectionTimeOutMin))+ElectionTimeOutMin) * time.Millisecond
-}
-
-// 检查自身心跳是否超时
+// 检查心跳是否超时
 func (rf *Raft) isHeartBeatTimeOut() bool {
 	return rf.heartBeatTimeOut.Before(time.Now())
 }
 
-// 获得自身Logs总长度
+// 获得Logs总长度
 func (rf *Raft) getLogsLen() int {
 	if len(rf.Logs) == 0 {
 		return 0
@@ -137,7 +118,7 @@ func (rf *Raft) getLogsLen() int {
 	return rf.getLog(-1).CommandIndex
 }
 
-// 获得某条Log,-1为最后一条
+// 获得Log,-1为最后一条
 func (rf *Raft) getLog(index int) *ApplyMsg {
 	if index == -1 {
 		return &rf.Logs[len(rf.Logs)-1]
@@ -196,13 +177,13 @@ func (rf *Raft) readPersist(data []byte) {
 			rf.SnapshotData = SnapshotData
 			rf.X = rf.Logs[0].CommandIndex
 		}
-		fmt.Printf("s[%v] readPersist logsLen:[%v] Term:[%v] X:[%v]\n", rf.me, len(logs), rf.CurrentTerm, rf.X)
+		DPrintf("s[%v] readPersist logsLen:[%v] Term:[%v] X:[%v]\n", rf.me, len(logs), rf.CurrentTerm, rf.X)
 	}
 }
 
 // 更新自己的commitIndex,用之前先检查,并且要Lock
 func (rf *Raft) updateCommitIndex(commitIndex int) {
-	fmt.Printf("s[%v] update commitIndex [%v]->[%v] logsLen:[%v]\n", rf.me, rf.commitIndex, commitIndex, rf.getLogsLen())
+	DPrintf("s[%v] update commitIndex [%v]->[%v] logsLen:[%v]\n", rf.me, rf.commitIndex, commitIndex, rf.getLogsLen())
 	rf.commitIndex = min(commitIndex, rf.getLogsLen())
 }
 
@@ -221,7 +202,7 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	rf.SnapshotData = snapshot
 	rf.X = index
 	rf.persist()
-	fmt.Printf("s[%v] snapshot Index:[%v] logsLen:[%v] X:[%v]\n", rf.me, index, rf.getLogsLen(), rf.X)
+	DPrintf("s[%v] snapshot Index:[%v] logsLen:[%v] X:[%v]\n", rf.me, index, rf.getLogsLen(), rf.X)
 	rf.mu.Unlock()
 }
 
@@ -297,7 +278,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 			rf.heartBeatTimeOut = time.Now().Add(getRandElectionTimeOut())
 			rf.VotedFor = args.CandidateIndex
 			rf.persist()
-			fmt.Printf("F[%v] vote to C[%v] args:[%v]\n", rf.me, args.CandidateIndex, args)
+			DPrintf("F[%v] vote to C[%v] args:[%v]\n", rf.me, args.CandidateIndex, args)
 		}
 	}
 }
@@ -323,7 +304,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 			CommandTerm:  term,
 		}
 		rf.Logs = append(rf.Logs, log)
-		fmt.Printf("L[%v] Leader get a Start request[%v], Index:[%v] Term:[%v]\n", rf.me, command, index, term)
+		DPrintf("L[%v] Leader get a Start request[%v], Index:[%v] Term:[%v]\n", rf.me, command, index, term)
 		rf.persist()
 	}
 	return index, term, isLeader
@@ -344,7 +325,7 @@ func (rf *Raft) ticker() {
 		rf.mu.Lock()
 		// 检查是否要开始领导选举
 		if rf.isHeartBeatTimeOut() && rf.role == Follower {
-			fmt.Printf("s[%v] start a election now,Term:[%v] log:[%v]\n", rf.me, rf.CurrentTerm, rf.getLogsLen())
+			DPrintf("s[%v] start a election now,Term:[%v] log:[%v]\n", rf.me, rf.CurrentTerm, rf.getLogsLen())
 			rf.mu.Unlock()
 			rf.startElection()
 		} else {
@@ -382,7 +363,7 @@ func (rf *Raft) applier() {
 				rf.applyCh <- *log
 				rf.mu.Lock()
 				if rf.role == Leader {
-					fmt.Printf("L[%v] apply log[%v]:%v\n", rf.me, index, rf.getLog(index))
+					DPrintf("L[%v] apply log[%v]:%v\n", rf.me, index, rf.getLog(index))
 				}
 
 			}
@@ -416,12 +397,12 @@ func (rf *Raft) startElection() {
 		voteCount := rf.getGrantedVotes()
 		if rf.role == Follower {
 			// 1.其他人成为了Leader,Candidate转为了Follower
-			fmt.Printf("C[%v] another server is leader now, Term:[%v]\n", rf.me, rf.CurrentTerm)
+			DPrintf("C[%v] another server is leader now, Term:[%v]\n", rf.me, rf.CurrentTerm)
 			rf.mu.Unlock()
 			return
 		} else if voteCount > len(rf.peers)/2 {
 			// 2.赢得了大部分选票,成为Leader
-			fmt.Printf("L[%v] is a Leader now, Term:[%v] votes:[%v]\n", rf.me, rf.CurrentTerm, rf.peersVoteGranted)
+			DPrintf("L[%v] is a Leader now, Term:[%v] votes:[%v]\n", rf.me, rf.CurrentTerm, rf.peersVoteGranted)
 			rf.role = Leader
 			// 初始化Leader需要的内容
 			rf.nextIndex = make([]int, len(rf.peers))
@@ -441,7 +422,7 @@ func (rf *Raft) startElection() {
 			return
 		} else if rf.isHeartBeatTimeOut() {
 			// 3.选举超时,重新开始选举
-			fmt.Printf("s[%v] election timeout, restart election now, Term:[%v]\n", rf.me, rf.CurrentTerm)
+			DPrintf("s[%v] election timeout, restart election now, Term:[%v]\n", rf.me, rf.CurrentTerm)
 			rf.mu.Unlock()
 			rf.startElection()
 			return
@@ -519,7 +500,7 @@ func (rf *Raft) checkCommittedLogs(startTerm int) {
 		}
 		// Leader只能提交自己任期的Log,也只能通过这种方式顺带提交之前未提交的Log
 		if N > rf.commitIndex && rf.getLog(N).CommandTerm == rf.CurrentTerm {
-			fmt.Printf("L[%v] update commitIndex to [%v]\n", rf.me, N)
+			DPrintf("L[%v] update commitIndex to [%v]\n", rf.me, N)
 			rf.updateCommitIndex(N)
 		}
 		rf.mu.Unlock()
@@ -533,7 +514,7 @@ func (rf *Raft) pushLogsToFollower(server int, startTerm int) {
 		rf.mu.Lock()
 		if startTerm != rf.CurrentTerm {
 			// 如果不是Leader了,停止推送Logs
-			fmt.Printf("L[%v] stop push entry to F[%v], Role:[%v] Term:[%v] startTerm:[%v]\n", rf.me, server, rf.role, rf.CurrentTerm, startTerm)
+			DPrintf("L[%v] stop push entry to F[%v], Role:[%v] Term:[%v] startTerm:[%v]\n", rf.me, server, rf.role, rf.CurrentTerm, startTerm)
 			rf.mu.Unlock()
 			return
 		}
@@ -555,7 +536,7 @@ func (rf *Raft) pushLog(server int, startTerm int) {
 	}
 	nextIndex := rf.nextIndex[server]
 	if nextIndex <= rf.X && rf.X != 0 {
-		fmt.Printf("L[%v] push Snapshot to s[%v]\n", rf.me, server)
+		DPrintf("L[%v] push Snapshot to s[%v]\n", rf.me, server)
 		// Leader没有用于同步的Log,推送Snapshot,第X条Log只能用于校验,其内容在Snapshot里
 		ok := rf.sendInstallSnapshot(server)
 		if ok {
@@ -577,12 +558,12 @@ func (rf *Raft) pushLog(server int, startTerm int) {
 		pushOk, pushReply := rf.sendAppendEntries(pushLogs, nextIndex, server)
 		if pushOk == false {
 			// 推送请求失败,可能是超时,丢包或者Leader状态改变
-			//fmt.Printf("L[%v] push log to F[%v] timeout or status changed!\n", rf.me, server)
+			//DPrintf("L[%v] push log to F[%v] timeout or status changed!\n", rf.me, server)
 		} else if pushReply.Success {
 			// 检查推送完成后是否为最新,不为则继续Push,更新Follower的nextIndex,matchIndex
 			rf.nextIndex[server] = pushLastIndex + 1
 			rf.matchIndex[server] = pushLastIndex
-			fmt.Printf("L[%v] push log to F[%v] success,Leader LogsLen:[%v] pushLast:[%v] pushLen:[%v]\n", rf.me, server, rf.getLogsLen(), pushLastIndex, len(pushLogs))
+			DPrintf("L[%v] push log to F[%v] success,Leader LogsLen:[%v] pushLast:[%v] pushLen:[%v]\n", rf.me, server, rf.getLogsLen(), pushLastIndex, len(pushLogs))
 		} else {
 			// 校验失败但是请求成功,减少nextIndex且重试
 			if pushReply.ConflictTerm != -1 {
@@ -607,7 +588,7 @@ func (rf *Raft) pushLog(server int, startTerm int) {
 			}
 			// 防止nextIndex被设为0,最低为1
 			rf.nextIndex[server] = max(rf.nextIndex[server], 1)
-			fmt.Printf("L[%v] change F[%v] nextIndex:[%v]->[%v]\n", rf.me, server, nextIndex, rf.nextIndex[server])
+			DPrintf("L[%v] change F[%v] nextIndex:[%v]->[%v]\n", rf.me, server, nextIndex, rf.nextIndex[server])
 		}
 	}
 }
