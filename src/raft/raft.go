@@ -93,13 +93,13 @@ const (
 	Candidate = 2
 	Leader    = 3
 
-	TickerSleepTime   = 60 * time.Millisecond  // Ticker 睡眠时间 ms
-	ApplierSleepTime  = 30 * time.Millisecond  // Applier睡眠时间
+	TickerSleepTime   = 50 * time.Millisecond  // Ticker 睡眠时间 ms
+	ApplierSleepTime  = 15 * time.Millisecond  // Applier睡眠时间
 	ElectionSleepTime = 25 * time.Millisecond  // 选举睡眠时间
 	HeartBeatSendTime = 115 * time.Millisecond // 心跳包发送时间 ms
 
-	PushLogsSleepTime           = 50 * time.Millisecond // Leader推送Log的间隔时间
-	checkCommittedLogsSleepTime = 60 * time.Millisecond // Leader更新CommitIndex的间隔时间
+	PushLogsSleepTime           = 30 * time.Millisecond // Leader推送Log的间隔时间
+	checkCommittedLogsSleepTime = 20 * time.Millisecond // Leader更新CommitIndex的间隔时间
 
 	ElectionTimeOutMin = 300 // 选举超时时间(也用于检查是否需要开始选举) 区间
 	ElectionTimeOutMax = 400
@@ -107,6 +107,13 @@ const (
 
 func min(a int, b int) int {
 	if a <= b {
+		return a
+	}
+	return b
+}
+
+func max(a int, b int) int {
+	if a >= b {
 		return a
 	}
 	return b
@@ -189,7 +196,7 @@ func (rf *Raft) readPersist(data []byte) {
 			rf.SnapshotData = SnapshotData
 			rf.X = rf.Logs[0].CommandIndex
 		}
-		fmt.Printf("s[%v] readPersist logsLen:[%v] Term:[%v] X:[%v] %v\n", rf.me, len(logs), rf.CurrentTerm, rf.X, time.Now())
+		fmt.Printf("s[%v] readPersist logsLen:[%v] Term:[%v] X:[%v]\n", rf.me, len(logs), rf.CurrentTerm, rf.X)
 	}
 }
 
@@ -205,7 +212,6 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 
 func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	rf.mu.Lock()
-	fmt.Printf("s[%v] snapshot Index:[%v] logsLen:[%v] X:[%v]\n", rf.me, index, rf.getLogsLen(), rf.X)
 	// 丢弃Index之前的所有Log
 	if rf.X == 0 {
 		rf.Logs = rf.Logs[index-1:]
@@ -215,6 +221,7 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	rf.SnapshotData = snapshot
 	rf.X = index
 	rf.persist()
+	fmt.Printf("s[%v] snapshot Index:[%v] logsLen:[%v] X:[%v]\n", rf.me, index, rf.getLogsLen(), rf.X)
 	rf.mu.Unlock()
 }
 
@@ -250,7 +257,7 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 		rf.increaseTerm(args.LeaderTerm)
 	}
 	reply.FollowerTerm = rf.CurrentTerm
-	if rf.CurrentTerm >= args.LeaderTerm {
+	if rf.CurrentTerm <= args.LeaderTerm && args.LastIncludeIndex > rf.X {
 		rf.Logs = make([]ApplyMsg, 0)
 		lastLog := ApplyMsg{
 			CommandIndex: args.LastIncludeIndex,
@@ -259,7 +266,6 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 		rf.Logs = append(rf.Logs, lastLog)
 		rf.SnapshotData = args.SnapshotData
 		rf.X = args.LastIncludeIndex
-		rf.commitIndex = rf.X
 		rf.persist()
 	}
 	rf.mu.Unlock()
@@ -291,7 +297,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 			rf.heartBeatTimeOut = time.Now().Add(getRandElectionTimeOut())
 			rf.VotedFor = args.CandidateIndex
 			rf.persist()
-			fmt.Printf("s[%v] vote to C[%v] args:[%v]\n", rf.me, args.CandidateIndex, args)
+			fmt.Printf("F[%v] vote to C[%v] args:[%v]\n", rf.me, args.CandidateIndex, args)
 		}
 	}
 }
@@ -355,7 +361,7 @@ func (rf *Raft) applier() {
 		rf.commitIndex = min(rf.commitIndex, rf.getLogsLen())
 		if rf.commitIndex > rf.lastAppliedIndex {
 			// 有Log没有被提交上去,开始提交
-			for index := rf.lastAppliedIndex + 1; index <= rf.commitIndex; index++ {
+			for index := rf.lastAppliedIndex + 1; index <= rf.commitIndex && index <= rf.getLogsLen(); index++ {
 				var log *ApplyMsg
 				if index <= rf.X {
 					// 如果提交的是Snapshot的内容(index在X之前)
@@ -548,7 +554,7 @@ func (rf *Raft) pushLog(server int, startTerm int) {
 		return
 	}
 	nextIndex := rf.nextIndex[server]
-	if nextIndex <= rf.X {
+	if nextIndex <= rf.X && rf.X != 0 {
 		fmt.Printf("L[%v] push Snapshot to s[%v]\n", rf.me, server)
 		// Leader没有用于同步的Log,推送Snapshot,第X条Log只能用于校验,其内容在Snapshot里
 		ok := rf.sendInstallSnapshot(server)
@@ -582,12 +588,12 @@ func (rf *Raft) pushLog(server int, startTerm int) {
 			if pushReply.ConflictTerm != -1 {
 				flag := false
 				// 如果Leader有ConflictTerm的Log,将nextIndex设为对应Term中的最后一条的下一条
-				for index := 0; index < len(rf.Logs); index++ {
-					if !flag && rf.Logs[index].CommandTerm == pushReply.ConflictTerm {
+				for _, log := range rf.Logs {
+					if !flag && log.CommandTerm == pushReply.ConflictTerm {
 						flag = true
-					} else if flag && rf.Logs[index].CommandTerm != pushReply.ConflictTerm {
+					} else if flag && log.CommandTerm != pushReply.ConflictTerm {
 						// Leader有对应Term的Log
-						rf.nextIndex[server] = rf.Logs[index].CommandIndex
+						rf.nextIndex[server] = log.CommandIndex
 						break
 					}
 				}
@@ -599,6 +605,8 @@ func (rf *Raft) pushLog(server int, startTerm int) {
 				// Follower的日志太短了
 				rf.nextIndex[server] = pushReply.ConflictIndex
 			}
+			// 防止nextIndex被设为0,最低为1
+			rf.nextIndex[server] = max(rf.nextIndex[server], 1)
 			fmt.Printf("L[%v] change F[%v] nextIndex:[%v]->[%v]\n", rf.me, server, nextIndex, rf.nextIndex[server])
 		}
 	}
@@ -690,7 +698,7 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 	if args.PrevLogIndex < rf.X && rf.X != 0 {
 		// 如果Leader校验的Index在Follower的X之前,直接要求Leader发送Snapshot
 		reply.Success = false
-		reply.ConflictIndex = 0
+		reply.ConflictIndex = 1
 		reply.ConflictTerm = -1
 	} else if args.PrevLogIndex == 0 {
 		// 如果是第一条Log不校验
@@ -703,20 +711,20 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 	} else if args.PrevLogIndex <= rf.getLogsLen() && rf.getLog(args.PrevLogIndex).CommandTerm == args.PrevLogTerm {
 		// 校验正常,逐条追加(心跳包也会走到这里)
 		reply.Success = true
-		for _, msg := range args.Logs {
-			if msg.CommandIndex <= rf.getLogsLen() {
+		for _, log := range args.Logs {
+			if log.CommandIndex <= rf.getLogsLen() {
 				// Follower在这个Index有Log,如果Term不相同删除从此条Log开始的所有Log
-				if rf.getLog(msg.CommandIndex).CommandTerm != msg.CommandTerm {
+				if rf.getLog(log.CommandIndex).CommandTerm != log.CommandTerm {
 					if rf.X == 0 {
-						rf.Logs = rf.Logs[:msg.CommandIndex-1]
+						rf.Logs = rf.Logs[:log.CommandIndex-1]
 					} else {
-						rf.Logs = rf.Logs[:msg.CommandIndex-rf.X]
+						rf.Logs = rf.Logs[:log.CommandIndex-rf.X]
 					}
-					rf.Logs = append(rf.Logs, msg)
+					rf.Logs = append(rf.Logs, log)
 				}
 			} else {
 				// Follower在这个Index没有Log直接追加
-				rf.Logs = append(rf.Logs, msg)
+				rf.Logs = append(rf.Logs, log)
 			}
 		}
 		rf.persist()
@@ -724,9 +732,9 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 		// 发生冲突,Prev索引相同任期不同,返回冲突的任期和该任期的第一条Log的Index
 		reply.Success = false
 		reply.ConflictTerm = rf.getLog(args.PrevLogIndex).CommandTerm
-		for index := 1; index <= rf.getLogsLen(); index++ {
-			if rf.Logs[index-1].CommandTerm == reply.ConflictTerm {
-				reply.ConflictIndex = index
+		for _, log := range rf.Logs {
+			if log.CommandTerm == reply.ConflictTerm {
+				reply.ConflictIndex = log.CommandIndex
 				break
 			}
 		}
@@ -736,7 +744,7 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 		reply.ConflictTerm = -1
 		reply.ConflictIndex = rf.getLogsLen()
 	}
-	// 校验成功才会为True,只有这种情况能对commitIndex操作
+	// 校验成功才会为True,只有这种情况能对commitIndex有操作
 	if reply.Success {
 		// 更新最后一条新Entry的下标,如果校验失败不会走到这里
 		if len(args.Logs) > 0 && args.Logs[len(args.Logs)-1].CommandIndex >= rf.commitIndex {
