@@ -1,28 +1,12 @@
 package kvraft
 
 import (
-	"log"
 	"mit6.824/labgob"
 	"mit6.824/labrpc"
 	"mit6.824/raft"
 	"sync"
 	"sync/atomic"
 )
-
-const (
-	Debug = false
-
-	Get    = 1
-	Put    = 2
-	Append = 3
-)
-
-func DPrintf(format string, a ...interface{}) (n int, err error) {
-	if Debug {
-		log.Printf(format, a...)
-	}
-	return
-}
 
 type Op struct {
 	Type  int // 任务类型,Get/Put/Append
@@ -40,6 +24,7 @@ type KVServer struct {
 	maxraftstate int // snapshot if log grows this big
 
 	// Your definitions here.
+	data map[string]string // K/V数据库
 }
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
@@ -84,6 +69,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.maxraftstate = maxraftstate
 
 	// You may need initialization code here.
+	kv.data = make(map[string]string)
 
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)

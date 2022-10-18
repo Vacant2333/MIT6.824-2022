@@ -1,9 +1,21 @@
 package kvraft
 
+import (
+	"crypto/rand"
+	"log"
+	"math/big"
+)
+
 const (
 	OK             = "OK"
 	ErrNoKey       = "ErrNoKey"
 	ErrWrongLeader = "ErrWrongLeader"
+
+	Debug = false
+
+	Get    = 1
+	Put    = 2
+	Append = 3
 )
 
 type Err string
@@ -30,4 +42,18 @@ type GetArgs struct {
 type GetReply struct {
 	Err   Err
 	Value string
+}
+
+func DPrintf(format string, a ...interface{}) (n int, err error) {
+	if Debug {
+		log.Printf(format, a...)
+	}
+	return
+}
+
+func nrand() int64 {
+	max := big.NewInt(int64(1) << 62)
+	bigx, _ := rand.Int(rand.Reader, max)
+	x := bigx.Int64()
+	return x
 }
