@@ -9,7 +9,7 @@ import (
 )
 
 type Op struct {
-	Type  int // 任务类型,Get/Put/Append
+	Type  string
 	Key   string
 	Value string
 }
@@ -35,14 +35,19 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	// Your code here.
 }
 
-func (kv *KVServer) Kill() {
-	atomic.StoreInt32(&kv.dead, 1)
-	kv.rf.Kill()
-}
-
-func (kv *KVServer) killed() bool {
-	z := atomic.LoadInt32(&kv.dead)
-	return z == 1
+func (kv *KVServer) applier() {
+	for kv.killed() == false {
+		// todo:exit Ch
+		msg := <-kv.applyCh
+		command, _ := msg.Command.(Op)
+		kv.mu.Lock()
+		if command.Type == "Put" {
+			kv.data[command.Key] = command.Value
+		} else if command.Type == "Append" {
+			kv.data[command.Key] += command.Value
+		}
+		kv.mu.Unlock()
+	}
 }
 
 //
@@ -60,21 +65,25 @@ func (kv *KVServer) killed() bool {
 // for any long-running work.
 //
 func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister, maxraftstate int) *KVServer {
-	// call labgob.Register on structures you want
-	// Go's RPC library to marshall/unmarshall.
 	labgob.Register(Op{})
-
-	kv := new(KVServer)
-	kv.me = me
-	kv.maxraftstate = maxraftstate
-
-	// You may need initialization code here.
-	kv.data = make(map[string]string)
-
-	kv.applyCh = make(chan raft.ApplyMsg)
-	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
-
-	// You may need initialization code here.
-
+	applyCh := make(chan raft.ApplyMsg)
+	kv := &KVServer{
+		me:           me,
+		rf:           raft.Make(servers, me, persister, applyCh),
+		applyCh:      applyCh,
+		maxraftstate: maxraftstate,
+		data:         make(map[string]string),
+	}
+	go kv.applier()
 	return kv
+}
+
+func (kv *KVServer) Kill() {
+	atomic.StoreInt32(&kv.dead, 1)
+	kv.rf.Kill()
+}
+
+func (kv *KVServer) killed() bool {
+	z := atomic.LoadInt32(&kv.dead)
+	return z == 1
 }
