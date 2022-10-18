@@ -99,7 +99,7 @@ const (
 	HeartBeatSendTime = 115 * time.Millisecond // 心跳包发送时间 ms
 
 	PushLogsSleepTime           = 30 * time.Millisecond // Leader推送Log的间隔时间
-	checkCommittedLogsSleepTime = 20 * time.Millisecond // Leader更新CommitIndex的间隔时间
+	CheckCommittedLogsSleepTime = 20 * time.Millisecond // Leader更新CommitIndex的间隔时间
 
 	ElectionTimeOutMin = 300 // 选举超时时间(也用于检查是否需要开始选举) 区间
 	ElectionTimeOutMax = 400
@@ -504,7 +504,7 @@ func (rf *Raft) checkCommittedLogs(startTerm int) {
 			rf.updateCommitIndex(N)
 		}
 		rf.mu.Unlock()
-		time.Sleep(checkCommittedLogsSleepTime)
+		time.Sleep(CheckCommittedLogsSleepTime)
 	}
 }
 
