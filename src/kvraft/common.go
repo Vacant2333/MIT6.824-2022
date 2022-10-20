@@ -13,8 +13,9 @@ const (
 	OK             = "OK"
 	ErrNoKey       = "ErrNoKey"
 	ErrWrongLeader = "ErrWrongLeader"
+	ErrNoLeader    = "ErrNoLeader"
 
-	doTaskSleepTime = 10 * time.Millisecond
+	doTaskSleepTime = 20 * time.Millisecond
 )
 
 type Err string
@@ -51,11 +52,10 @@ type task struct {
 	resultCh chan string
 }
 
-func DPrintf(format string, a ...interface{}) (n int, err error) {
+func DPrintf(format string, a ...interface{}) {
 	if Debug {
 		log.Printf(format, a...)
 	}
-	return
 }
 
 func nRand() int64 {

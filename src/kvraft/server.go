@@ -1,6 +1,7 @@
 package kvraft
 
 import (
+	"fmt"
 	"mit6.824/labgob"
 	"mit6.824/labrpc"
 	"mit6.824/raft"
@@ -24,19 +25,25 @@ type KVServer struct {
 	maxraftstate int
 
 	data map[string]string // K/V数据库
-	ops  map[int64]chan string
+	ops  map[int64]chan Err
 }
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	kv.mu.Lock()
 	if kv.isLeader() {
+		DPrintf("S[%v] start Get key[%v]\n", kv.me, args.Key)
 		kv.rf.Start(Op{
 			Type: "Get",
 			Key:  args.Key,
 			Tag:  args.Tag,
 		})
-		kv.ops[args.Tag] = make(chan string)
-		reply.Value = <-kv.ops[args.Tag]
+		kv.ops[args.Tag] = make(chan Err)
+		kv.mu.Unlock()
+		reply.Err = <-kv.ops[args.Tag]
+		kv.mu.Lock()
+		if reply.Err == OK {
+			reply.Value = kv.data[args.Key]
+		}
 	} else {
 		reply.Err = ErrWrongLeader
 	}
@@ -46,13 +53,17 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	kv.mu.Lock()
 	if kv.isLeader() {
+		DPrintf("S[%v] start %v key[%v] value[%v]\n", kv.me, args.Op, args.Key, args.Value)
 		kv.rf.Start(Op{
-			Type: "Get",
-			Key:  args.Key,
-			Tag:  args.Tag,
+			Type:  args.Op,
+			Key:   args.Key,
+			Value: args.Value,
+			Tag:   args.Tag,
 		})
-		kv.ops[args.Tag] = make(chan string)
-		reply.Err = Err(<-kv.ops[args.Tag])
+		kv.ops[args.Tag] = make(chan Err)
+		kv.mu.Unlock()
+		reply.Err = <-kv.ops[args.Tag]
+		kv.mu.Lock()
 	} else {
 		reply.Err = ErrWrongLeader
 	}
@@ -65,10 +76,8 @@ func (kv *KVServer) isLeader() bool {
 	return isLeader
 }
 
-// 回复自己的某个任务
-func (kv *KVServer) replyOp(tag int64, s string) {
-	kv.mu.Lock()
-	defer kv.mu.Unlock()
+// 回复自己的某个任务,Lock使用
+func (kv *KVServer) replyOp(tag int64, s Err) {
 	if ch, ok := kv.ops[tag]; ok {
 		ch <- s
 		close(ch)
@@ -92,8 +101,14 @@ func (kv *KVServer) applier() {
 			} else {
 				kv.replyOp(command.Tag, ErrNoKey)
 			}
+			fmt.Println(kv.data)
 		} else {
-			kv.replyOp(command.Tag, kv.data[command.Key])
+			// Get
+			if _, ok := kv.data[command.Key]; ok {
+				kv.replyOp(command.Tag, OK)
+			} else {
+				kv.replyOp(command.Tag, ErrNoKey)
+			}
 		}
 		kv.mu.Unlock()
 	}
@@ -122,7 +137,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 		applyCh:      applyCh,
 		maxraftstate: maxraftstate,
 		data:         make(map[string]string),
-		ops:          make(map[int64]chan string),
+		ops:          make(map[int64]chan Err),
 	}
 	go kv.applier()
 	return kv
