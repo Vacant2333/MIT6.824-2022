@@ -1,6 +1,7 @@
 package kvraft
 
 import (
+	"fmt"
 	"mit6.824/labrpc"
 	"time"
 )
@@ -27,9 +28,10 @@ func (ck *Clerk) doTasks() {
 		if len(ck.taskQueue) > 0 {
 			// 添加task
 			currentTask := ck.taskQueue[0]
+			fmt.Printf("C[%v] start a task:[%v]\n", ck.clientTag, currentTask)
 			var args interface{}
 			// 根据任务类型设置args
-			if currentTask.op == Get {
+			if currentTask.op == "Get" {
 				// Get task
 				args = &GetArgs{
 					Key: currentTask.key,
@@ -48,7 +50,7 @@ func (ck *Clerk) doTasks() {
 			if ok {
 				// 任务完成
 				ck.taskQueue = ck.taskQueue[1:]
-				if currentTask.op == Get {
+				if currentTask.op == "Get" {
 					currentTask.resultCh <- value
 				}
 			}
@@ -64,7 +66,7 @@ func (ck *Clerk) askServers(op string, args interface{}) (bool, string) {
 	// 初始化reply
 	replies := make([]interface{}, len(ck.servers))
 	for index, _ := range replies {
-		if op == Get {
+		if op == "Get" {
 			replies[index] = &GetReply{}
 		} else {
 			replies[index] = &PutAppendReply{}
@@ -72,7 +74,12 @@ func (ck *Clerk) askServers(op string, args interface{}) (bool, string) {
 	}
 	// 向某个Server提交Task
 	askServer := func(server int, reply interface{}) {
-		ck.servers[server].Call("KVServer."+op, args, reply)
+		if op == "Get" {
+			ck.servers[server].Call("KVServer.Get", args, reply)
+		} else {
+			ck.servers[server].Call("KVServer.PutAppend", args, reply)
+		}
+
 		replyCh <- reply
 	}
 	// 从每个服务器拿结果
@@ -81,13 +88,13 @@ func (ck *Clerk) askServers(op string, args interface{}) (bool, string) {
 	}
 	// 持续检查replyCh,如果有可用的reply则直接返回
 	for server := 0; server < len(ck.servers); server++ {
-		if op == Get {
-			reply := (<-replyCh).(GetReply)
+		if op == "Get" {
+			reply := (<-replyCh).(*GetReply)
 			if reply.Err == OK {
 				return true, reply.Value
 			}
 		} else {
-			reply := (<-replyCh).(PutAppendReply)
+			reply := (<-replyCh).(*PutAppendReply)
 			if reply.Err == OK {
 				return true, ""
 			}
@@ -102,7 +109,7 @@ func (ck *Clerk) Get(key string) string {
 	defer close(resultCh)
 	ck.taskQueue = append(ck.taskQueue, task{
 		index:    ck.taskIndex + 1,
-		op:       Get,
+		op:       "Get",
 		key:      key,
 		resultCh: resultCh,
 		taskTag:  ck.clientTag + int64(ck.taskIndex) + 1,
@@ -123,8 +130,8 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 }
 
 func (ck *Clerk) Put(key string, value string) {
-	ck.PutAppend(key, value, Put)
+	ck.PutAppend(key, value, "Put")
 }
 func (ck *Clerk) Append(key string, value string) {
-	ck.PutAppend(key, value, Append)
+	ck.PutAppend(key, value, "Append")
 }

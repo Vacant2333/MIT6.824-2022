@@ -12,39 +12,88 @@ type Op struct {
 	Type  string
 	Key   string
 	Value string
+	Tag   int64
 }
 
 type KVServer struct {
-	mu      sync.Mutex
-	me      int
-	rf      *raft.Raft
-	applyCh chan raft.ApplyMsg
-	dead    int32 // set by Kill()
+	mu           sync.Mutex
+	me           int
+	rf           *raft.Raft
+	applyCh      chan raft.ApplyMsg
+	dead         int32
+	maxraftstate int
 
-	maxraftstate int // snapshot if log grows this big
-
-	// Your definitions here.
 	data map[string]string // K/V数据库
+	ops  map[int64]chan string
 }
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
-	// Your code here.
+	kv.mu.Lock()
+	if kv.isLeader() {
+		kv.rf.Start(Op{
+			Type: "Get",
+			Key:  args.Key,
+			Tag:  args.Tag,
+		})
+		kv.ops[args.Tag] = make(chan string)
+		reply.Value = <-kv.ops[args.Tag]
+	} else {
+		reply.Err = ErrWrongLeader
+	}
+	kv.mu.Unlock()
 }
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
-	// Your code here.
+	kv.mu.Lock()
+	if kv.isLeader() {
+		kv.rf.Start(Op{
+			Type: "Get",
+			Key:  args.Key,
+			Tag:  args.Tag,
+		})
+		kv.ops[args.Tag] = make(chan string)
+		reply.Err = Err(<-kv.ops[args.Tag])
+	} else {
+		reply.Err = ErrWrongLeader
+	}
+	kv.mu.Unlock()
+}
+
+// 检查自己是否为Leader,Lock使用
+func (kv *KVServer) isLeader() bool {
+	_, isLeader := kv.rf.GetState()
+	return isLeader
+}
+
+// 回复自己的某个任务
+func (kv *KVServer) replyOp(tag int64, s string) {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+	if ch, ok := kv.ops[tag]; ok {
+		ch <- s
+		close(ch)
+		delete(kv.ops, tag)
+	}
 }
 
 func (kv *KVServer) applier() {
 	for kv.killed() == false {
-		// todo:exit Ch
+		// todo:exit Ch,reach Snapshot
 		msg := <-kv.applyCh
 		command, _ := msg.Command.(Op)
 		kv.mu.Lock()
 		if command.Type == "Put" {
 			kv.data[command.Key] = command.Value
+			kv.replyOp(command.Tag, OK)
 		} else if command.Type == "Append" {
-			kv.data[command.Key] += command.Value
+			if _, ok := kv.data[command.Key]; ok {
+				kv.data[command.Key] += command.Value
+				kv.replyOp(command.Tag, OK)
+			} else {
+				kv.replyOp(command.Tag, ErrNoKey)
+			}
+		} else {
+			kv.replyOp(command.Tag, kv.data[command.Key])
 		}
 		kv.mu.Unlock()
 	}
@@ -73,6 +122,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 		applyCh:      applyCh,
 		maxraftstate: maxraftstate,
 		data:         make(map[string]string),
+		ops:          make(map[int64]chan string),
 	}
 	go kv.applier()
 	return kv

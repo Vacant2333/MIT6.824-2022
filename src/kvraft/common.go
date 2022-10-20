@@ -14,10 +14,6 @@ const (
 	ErrNoKey       = "ErrNoKey"
 	ErrWrongLeader = "ErrWrongLeader"
 
-	Get    = "Get"
-	Put    = "Put"
-	Append = "Append"
-
 	doTaskSleepTime = 10 * time.Millisecond
 )
 
