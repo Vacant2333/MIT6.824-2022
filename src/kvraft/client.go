@@ -124,7 +124,7 @@ func (ck *Clerk) Get(key string) string {
 		op:       "Get",
 		key:      key,
 		resultCh: resultCh,
-		taskTag:  ck.clientTag + int64(ck.taskIndex) + 1,
+		taskTag:  tag(ck.clientTag + int64(ck.taskIndex) + 1),
 	})
 	ck.taskIndex++
 	ck.mu.Unlock()
@@ -138,7 +138,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 		op:      op,
 		key:     key,
 		value:   value,
-		taskTag: ck.clientTag + int64(ck.taskIndex) + 1,
+		taskTag: tag(ck.clientTag + int64(ck.taskIndex) + 1),
 	})
 	ck.taskIndex++
 	ck.mu.Unlock()

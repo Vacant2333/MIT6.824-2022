@@ -21,13 +21,13 @@ const (
 )
 
 type Err string
+type tag int64
 
 type PutAppendArgs struct {
 	Key   string
 	Value string
 	Op    string // "Put" or "Append"
-	// You'll have to add definitions here.
-	Tag int64
+	Tag   tag
 }
 
 type PutAppendReply struct {
@@ -36,8 +36,7 @@ type PutAppendReply struct {
 
 type GetArgs struct {
 	Key string
-	// You'll have to add definitions here.
-	Tag int64
+	Tag tag
 }
 
 type GetReply struct {
@@ -50,7 +49,7 @@ type task struct {
 	op       string
 	key      string
 	value    string
-	taskTag  int64
+	taskTag  tag
 	resultCh chan string
 }
 

@@ -13,7 +13,7 @@ type Op struct {
 	Type  string
 	Key   string
 	Value string
-	Tag   int64
+	Tag   tag
 }
 
 type KVServer struct {
@@ -25,8 +25,8 @@ type KVServer struct {
 	maxraftstate int
 
 	data      map[string]string // K/V数据库
-	doneTags  map[int64]bool
-	dontIndex map[int]int64
+	doneTags  map[tag]bool
+	dontIndex map[int]tag
 }
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
@@ -41,7 +41,6 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 		kv.mu.Unlock()
 		for {
 			done, tag := kv.checkOpDone(index)
-			//fmt.Println(done, tag)
 			if done {
 				if tag == args.Tag {
 					kv.mu.Lock()
@@ -124,7 +123,7 @@ func (kv *KVServer) applier() {
 }
 
 // 检查Tag是否有记录过,Lock使用
-func (kv *KVServer) checkTag(tag int64, save bool) bool {
+func (kv *KVServer) checkTag(tag tag, save bool) bool {
 	_, ok := kv.doneTags[tag]
 	if save && !ok {
 		// 不存在并且save为True,存入doneTags
@@ -134,7 +133,7 @@ func (kv *KVServer) checkTag(tag int64, save bool) bool {
 }
 
 // 通过index检查任务是否完成,返回是否完成和任务的tag,Lock使用
-func (kv *KVServer) checkOpDone(index int) (bool, int64) {
+func (kv *KVServer) checkOpDone(index int) (bool, tag) {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
 	tag, ok := kv.dontIndex[index]
@@ -150,8 +149,8 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 		applyCh:      applyCh,
 		maxraftstate: maxraftstate,
 		data:         make(map[string]string),
-		doneTags:     make(map[int64]bool),
-		dontIndex:    make(map[int]int64),
+		doneTags:     make(map[tag]bool),
+		dontIndex:    make(map[int]tag),
 	}
 	go kv.applier()
 	return kv
