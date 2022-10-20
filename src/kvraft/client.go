@@ -2,11 +2,13 @@ package kvraft
 
 import (
 	"mit6.824/labrpc"
+	"sync"
 	"time"
 )
 
 type Clerk struct {
 	servers   []*labrpc.ClientEnd
+	mu        sync.Mutex
 	taskQueue []task
 	taskIndex int
 	clientTag int64
@@ -24,6 +26,7 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 
 func (ck *Clerk) doTasks() {
 	for {
+		ck.mu.Lock()
 		if len(ck.taskQueue) > 0 {
 			// 添加task
 			currentTask := ck.taskQueue[0]
@@ -45,7 +48,9 @@ func (ck *Clerk) doTasks() {
 					Tag:   currentTask.taskTag,
 				}
 			}
+			ck.mu.Unlock()
 			err, value := ck.askServers(currentTask.op, args)
+			ck.mu.Lock()
 			if err != ErrNoLeader {
 				// 任务完成,Err不一定是OK,也可能是ErrNoKey
 				DPrintf("C[%v] success a task:[%v]\n", ck.clientTag, currentTask)
@@ -58,11 +63,12 @@ func (ck *Clerk) doTasks() {
 				DPrintf("C[%v] fail a task:[%v]\n", ck.clientTag, currentTask)
 			}
 		}
+		ck.mu.Unlock()
 		time.Sleep(doTaskSleepTime)
 	}
 }
 
-// 并行的向所有Servers发送某个Task
+// 并行的向所有Servers发送某个Task,Lock使用
 func (ck *Clerk) askServers(op string, args interface{}) (Err, string) {
 	// 所有的reply发送到该ch
 	replyCh := make(chan interface{})
@@ -110,6 +116,7 @@ func (ck *Clerk) askServers(op string, args interface{}) (Err, string) {
 }
 
 func (ck *Clerk) Get(key string) string {
+	ck.mu.Lock()
 	resultCh := make(chan string)
 	defer close(resultCh)
 	ck.taskQueue = append(ck.taskQueue, task{
@@ -120,10 +127,12 @@ func (ck *Clerk) Get(key string) string {
 		taskTag:  ck.clientTag + int64(ck.taskIndex) + 1,
 	})
 	ck.taskIndex++
+	ck.mu.Unlock()
 	return <-resultCh
 }
 
 func (ck *Clerk) PutAppend(key string, value string, op string) {
+	ck.mu.Lock()
 	ck.taskQueue = append(ck.taskQueue, task{
 		index:   ck.taskIndex + 1,
 		op:      op,
@@ -132,6 +141,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 		taskTag: ck.clientTag + int64(ck.taskIndex) + 1,
 	})
 	ck.taskIndex++
+	ck.mu.Unlock()
 }
 
 func (ck *Clerk) Put(key string, value string) {
