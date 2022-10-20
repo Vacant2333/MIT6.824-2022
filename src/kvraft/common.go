@@ -14,6 +14,7 @@ const (
 	ErrNoKey       = "ErrNoKey"
 	ErrWrongLeader = "ErrWrongLeader"
 	ErrNoLeader    = "ErrNoLeader"
+	ErrFailConnect = "ErrFailConnect"
 
 	doTaskSleepTime      = 20 * time.Millisecond
 	checkOpDoneSleepTime = 10 * time.Millisecond

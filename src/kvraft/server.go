@@ -44,8 +44,15 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 			//fmt.Println(done, tag)
 			if done {
 				if tag == args.Tag {
-					reply.Err = OK
-					reply.Value = kv.data[args.Key]
+					kv.mu.Lock()
+					value, ok := kv.data[args.Key]
+					kv.mu.Unlock()
+					if ok {
+						reply.Err = OK
+						reply.Value = value
+					} else {
+						reply.Err = ErrNoKey
+					}
 				} else {
 					reply.Err = ErrWrongLeader
 				}

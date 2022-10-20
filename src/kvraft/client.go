@@ -30,7 +30,7 @@ func (ck *Clerk) doTasks() {
 		if len(ck.taskQueue) > 0 {
 			// 添加task
 			currentTask := ck.taskQueue[0]
-			DPrintf("C[%v] start a task:[%v]\n", ck.clientTag, currentTask)
+			//DPrintf("C[%v] start a task:[%v]\n", ck.clientTag, currentTask)
 			var args interface{}
 			// 根据任务类型设置args
 			if currentTask.op == "Get" {
@@ -60,7 +60,7 @@ func (ck *Clerk) doTasks() {
 				}
 			} else {
 				// err == ErrNoLeader,目前没有Leader能处理任务
-				DPrintf("C[%v] fail a task:[%v]\n", ck.clientTag, currentTask)
+				//DPrintf("C[%v] fail a task:[%v]\n", ck.clientTag, currentTask)
 			}
 		}
 		ck.mu.Unlock()
@@ -76,9 +76,9 @@ func (ck *Clerk) askServers(op string, args interface{}) (Err, string) {
 	replies := make([]interface{}, len(ck.servers))
 	for index, _ := range replies {
 		if op == "Get" {
-			replies[index] = &GetReply{}
+			replies[index] = &GetReply{Err: ErrFailConnect}
 		} else {
-			replies[index] = &PutAppendReply{}
+			replies[index] = &PutAppendReply{Err: ErrFailConnect}
 		}
 	}
 	// 向某个Server提交Task
@@ -98,13 +98,13 @@ func (ck *Clerk) askServers(op string, args interface{}) (Err, string) {
 	for count := 0; count < len(ck.servers); count++ {
 		if op == "Get" {
 			reply := (<-replyCh).(*GetReply)
-			DPrintf("C[%v] get a reply:[%v]\n", ck.clientTag, reply)
+			//DPrintf("C[%v] get a reply:[%v]\n", ck.clientTag, reply)
 			if reply.Err != ErrWrongLeader {
 				return reply.Err, reply.Value
 			}
 		} else {
 			reply := (<-replyCh).(*PutAppendReply)
-			DPrintf("C[%v] get a reply:[%v]\n", ck.clientTag, reply)
+			//DPrintf("C[%v] get a reply:[%v]\n", ck.clientTag, reply)
 			if reply.Err != ErrWrongLeader {
 				//DPrintf("C[%v] get a reply:[%v]\n", ck.clientTag, reply)
 				return reply.Err, ""
