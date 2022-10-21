@@ -94,7 +94,7 @@ const (
 	Leader    = 3
 
 	TickerSleepTime   = 50 * time.Millisecond  // Ticker 睡眠时间 ms
-	ApplierSleepTime  = 7 * time.Millisecond   // Applier睡眠时间
+	ApplierSleepTime  = 5 * time.Millisecond   // Applier睡眠时间
 	ElectionSleepTime = 25 * time.Millisecond  // 选举睡眠时间
 	HeartBeatSendTime = 115 * time.Millisecond // 心跳包发送时间 ms
 
