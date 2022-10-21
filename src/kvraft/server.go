@@ -50,7 +50,6 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 					if ok {
 						reply.Err = OK
 						reply.Value = value
-						fmt.Println("Get", reply)
 					} else {
 						reply.Err = ErrNoKey
 					}
@@ -82,12 +81,12 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		for {
 			done, tag := kv.checkOpDone(index)
 			if done {
+				fmt.Println(args.Op, tag, args.Tag)
 				if tag == args.Tag {
 					reply.Err = OK
 				} else {
 					reply.Err = ErrWrongLeader
 				}
-				//fmt.Println(reply)
 				break
 			}
 			time.Sleep(checkOpDoneSleepTime)
@@ -111,18 +110,17 @@ func (kv *KVServer) applier() {
 		command, _ := msg.Command.(Op)
 		kv.mu.Lock()
 		canSave := !kv.checkTag(command.Tag, true)
-		//fmt.Println(command, canSave)
 		kv.dontIndex[msg.CommandIndex] = command.Tag
 		if command.Type == "Put" && canSave {
 			kv.data[command.Key] = command.Value
+			fmt.Println("apply Put", msg.CommandIndex, command)
 		} else if command.Type == "Append" && canSave {
-			//fmt.Println("1", kv.data)
 			if _, ok := kv.data[command.Key]; ok {
 				kv.data[command.Key] += command.Value
 			} else {
 				kv.data[command.Key] = command.Value
 			}
-			fmt.Println(kv.data)
+			fmt.Println("apply Append", msg.CommandIndex, command)
 		}
 		kv.mu.Unlock()
 	}

@@ -56,14 +56,12 @@ func (ck *Clerk) doTasks() {
 				// 任务完成,Err不一定是OK,也可能是ErrNoKey
 				DPrintf("C[%v] success a task:[%v]\n", ck.clientTag, currentTask)
 				ck.taskQueue = ck.taskQueue[1:]
-				if currentTask.op == "Get" {
-					currentTask.resultCh <- value
-				}
-				fmt.Println("done", currentTask)
+				//if currentTask.op == "Get" {
+				currentTask.resultCh <- value
+				//}
 			} else {
 				// err == ErrNoLeader,目前没有Leader能处理任务
-				//DPrintf("C[%v] fail a task:[%v]\n", ck.clientTag, currentTask)
-				fmt.Println("undone", currentTask)
+				DPrintf("C[%v] fail a task:[%v]\n", ck.clientTag, currentTask)
 			}
 		}
 		ck.mu.Unlock()
@@ -79,9 +77,9 @@ func (ck *Clerk) askServers(op string, args interface{}) (Err, string) {
 	replies := make([]interface{}, len(ck.servers))
 	for index, _ := range replies {
 		if op == "Get" {
-			replies[index] = &GetReply{Err: ErrFailConnect}
+			replies[index] = &GetReply{}
 		} else {
-			replies[index] = &PutAppendReply{Err: ErrFailConnect}
+			replies[index] = &PutAppendReply{}
 		}
 	}
 	// 向某个Server提交Task
@@ -120,9 +118,9 @@ func (ck *Clerk) askServers(op string, args interface{}) (Err, string) {
 }
 
 func (ck *Clerk) Get(key string) string {
-	ck.mu.Lock()
 	resultCh := make(chan string)
 	defer close(resultCh)
+	ck.mu.Lock()
 	ck.taskQueue = append(ck.taskQueue, task{
 		index:    ck.taskIndex + 1,
 		op:       "Get",
@@ -136,17 +134,21 @@ func (ck *Clerk) Get(key string) string {
 }
 
 func (ck *Clerk) PutAppend(key string, value string, op string) {
-	fmt.Println(op, ck.clientTag, ck.taskIndex, key, value)
+	fmt.Println("NewTask:", op, ck.clientTag, ck.taskIndex, key, value)
+	resultCh := make(chan string)
+	defer close(resultCh)
 	ck.mu.Lock()
 	ck.taskQueue = append(ck.taskQueue, task{
-		index:   ck.taskIndex + 1,
-		op:      op,
-		key:     key,
-		value:   value,
-		taskTag: tag(ck.clientTag + int64(ck.taskIndex) + 1),
+		index:    ck.taskIndex + 1,
+		op:       op,
+		key:      key,
+		value:    value,
+		resultCh: resultCh,
+		taskTag:  tag(ck.clientTag + int64(ck.taskIndex) + 1),
 	})
 	ck.taskIndex++
 	ck.mu.Unlock()
+	<-resultCh
 }
 
 func (ck *Clerk) Put(key string, value string) {
