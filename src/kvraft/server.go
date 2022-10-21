@@ -1,6 +1,7 @@
 package kvraft
 
 import (
+	"fmt"
 	"mit6.824/labgob"
 	"mit6.824/labrpc"
 	"mit6.824/raft"
@@ -49,13 +50,14 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 					if ok {
 						reply.Err = OK
 						reply.Value = value
+						fmt.Println("Get", reply)
 					} else {
 						reply.Err = ErrNoKey
 					}
 				} else {
 					reply.Err = ErrWrongLeader
 				}
-				return
+				break
 			}
 			time.Sleep(checkOpDoneSleepTime)
 		}
@@ -85,6 +87,7 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 				} else {
 					reply.Err = ErrWrongLeader
 				}
+				//fmt.Println(reply)
 				break
 			}
 			time.Sleep(checkOpDoneSleepTime)
@@ -108,15 +111,18 @@ func (kv *KVServer) applier() {
 		command, _ := msg.Command.(Op)
 		kv.mu.Lock()
 		canSave := !kv.checkTag(command.Tag, true)
+		//fmt.Println(command, canSave)
 		kv.dontIndex[msg.CommandIndex] = command.Tag
 		if command.Type == "Put" && canSave {
 			kv.data[command.Key] = command.Value
 		} else if command.Type == "Append" && canSave {
+			//fmt.Println("1", kv.data)
 			if _, ok := kv.data[command.Key]; ok {
 				kv.data[command.Key] += command.Value
 			} else {
 				kv.data[command.Key] = command.Value
 			}
+			fmt.Println(kv.data)
 		}
 		kv.mu.Unlock()
 	}

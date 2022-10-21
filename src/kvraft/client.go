@@ -1,6 +1,7 @@
 package kvraft
 
 import (
+	"fmt"
 	"mit6.824/labrpc"
 	"sync"
 	"time"
@@ -30,7 +31,7 @@ func (ck *Clerk) doTasks() {
 		if len(ck.taskQueue) > 0 {
 			// 添加task
 			currentTask := ck.taskQueue[0]
-			//DPrintf("C[%v] start a task:[%v]\n", ck.clientTag, currentTask)
+			DPrintf("C[%v] start a task:[%v]\n", ck.clientTag, currentTask)
 			var args interface{}
 			// 根据任务类型设置args
 			if currentTask.op == "Get" {
@@ -58,9 +59,11 @@ func (ck *Clerk) doTasks() {
 				if currentTask.op == "Get" {
 					currentTask.resultCh <- value
 				}
+				fmt.Println("done", currentTask)
 			} else {
 				// err == ErrNoLeader,目前没有Leader能处理任务
 				//DPrintf("C[%v] fail a task:[%v]\n", ck.clientTag, currentTask)
+				fmt.Println("undone", currentTask)
 			}
 		}
 		ck.mu.Unlock()
@@ -99,13 +102,14 @@ func (ck *Clerk) askServers(op string, args interface{}) (Err, string) {
 		if op == "Get" {
 			reply := (<-replyCh).(*GetReply)
 			//DPrintf("C[%v] get a reply:[%v]\n", ck.clientTag, reply)
-			if reply.Err != ErrWrongLeader {
+			if reply.Err == OK || reply.Err == ErrNoKey {
 				return reply.Err, reply.Value
 			}
 		} else {
+			// Put/Append task
 			reply := (<-replyCh).(*PutAppendReply)
 			//DPrintf("C[%v] get a reply:[%v]\n", ck.clientTag, reply)
-			if reply.Err != ErrWrongLeader {
+			if reply.Err == OK {
 				//DPrintf("C[%v] get a reply:[%v]\n", ck.clientTag, reply)
 				return reply.Err, ""
 			}
@@ -132,6 +136,7 @@ func (ck *Clerk) Get(key string) string {
 }
 
 func (ck *Clerk) PutAppend(key string, value string, op string) {
+	fmt.Println(op, ck.clientTag, ck.taskIndex, key, value)
 	ck.mu.Lock()
 	ck.taskQueue = append(ck.taskQueue, task{
 		index:   ck.taskIndex + 1,
