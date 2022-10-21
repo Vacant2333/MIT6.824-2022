@@ -1,7 +1,6 @@
 package kvraft
 
 import (
-	"fmt"
 	"mit6.824/labgob"
 	"mit6.824/labrpc"
 	"mit6.824/raft"
@@ -61,6 +60,7 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 						reply.Err = ErrNoKey
 					}
 				} else {
+					// 任务被ntr了:(
 					reply.Err = ErrWrongLeader
 				}
 				break
@@ -95,7 +95,6 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 			}
 			done, tag := kv.checkOpDone(index)
 			if done {
-				fmt.Println(args.Op, tag, args.Tag)
 				if tag == args.Tag {
 					reply.Err = OK
 				} else {
@@ -113,7 +112,6 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 
 func (kv *KVServer) applier() {
 	for kv.killed() == false {
-		// todo:exit Ch,reach Snapshot
 		msg := <-kv.applyCh
 		command, _ := msg.Command.(Op)
 		kv.mu.Lock()
@@ -121,14 +119,12 @@ func (kv *KVServer) applier() {
 		kv.dontIndex[msg.CommandIndex] = command.Tag
 		if command.Type == "Put" && canSave {
 			kv.data[command.Key] = command.Value
-			fmt.Println("apply Put", msg.CommandIndex, command)
 		} else if command.Type == "Append" && canSave {
 			if _, ok := kv.data[command.Key]; ok {
 				kv.data[command.Key] += command.Value
 			} else {
 				kv.data[command.Key] = command.Value
 			}
-			fmt.Println(kv.me, "apply Append", msg.CommandIndex, command)
 		}
 		kv.mu.Unlock()
 	}

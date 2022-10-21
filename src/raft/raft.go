@@ -94,12 +94,12 @@ const (
 	Leader    = 3
 
 	TickerSleepTime   = 50 * time.Millisecond  // Ticker 睡眠时间 ms
-	ApplierSleepTime  = 15 * time.Millisecond  // Applier睡眠时间
+	ApplierSleepTime  = 7 * time.Millisecond   // Applier睡眠时间
 	ElectionSleepTime = 25 * time.Millisecond  // 选举睡眠时间
 	HeartBeatSendTime = 115 * time.Millisecond // 心跳包发送时间 ms
 
 	PushLogsSleepTime           = 30 * time.Millisecond // Leader推送Log的间隔时间
-	CheckCommittedLogsSleepTime = 20 * time.Millisecond // Leader更新CommitIndex的间隔时间
+	CheckCommittedLogsSleepTime = 10 * time.Millisecond // Leader更新CommitIndex的间隔时间
 
 	ElectionTimeOutMin = 300 // 选举超时时间(也用于检查是否需要开始选举) 区间
 	ElectionTimeOutMax = 400
@@ -415,10 +415,10 @@ func (rf *Raft) startElection() {
 					go rf.pushLogsToFollower(server, rf.CurrentTerm)
 				}
 			}
-			rf.mu.Unlock()
 			// 持续向所有Peers发送心跳包,以及检查是否要提交Logs
 			go rf.sendHeartBeatsToAll(rf.CurrentTerm)
 			go rf.checkCommittedLogs(rf.CurrentTerm)
+			rf.mu.Unlock()
 			return
 		} else if rf.isHeartBeatTimeOut() {
 			// 3.选举超时,重新开始选举
