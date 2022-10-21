@@ -1,7 +1,6 @@
 package kvraft
 
 import (
-	"fmt"
 	"mit6.824/labrpc"
 	"sync"
 	"time"
@@ -63,7 +62,7 @@ func (ck *Clerk) doTasks() {
 			}
 		}
 		ck.mu.Unlock()
-		time.Sleep(clientDoTaskSleepTime)
+		//time.Sleep(clientDoTaskSleepTime)
 	}
 }
 
@@ -84,7 +83,6 @@ func (ck *Clerk) askServers(op string, args interface{}) (Err, string) {
 	}
 	// 向某个Server提交Task
 	askServer := func(server int) {
-		fmt.Println("start")
 		if op == "Get" {
 			ck.servers[server].Call("KVServer.Get", args, replies[server])
 		} else {
@@ -92,7 +90,6 @@ func (ck *Clerk) askServers(op string, args interface{}) (Err, string) {
 		}
 		replyCh <- replies[server]
 		serverCh <- server
-		fmt.Println("end")
 	}
 	if ck.leaderIndex != -1 {
 		// 优先发给上一次保存的Leader

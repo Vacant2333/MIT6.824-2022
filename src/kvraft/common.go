@@ -15,18 +15,20 @@ const (
 	ErrWrongLeader = "ErrWrongLeader"
 	ErrNoLeader    = "ErrNoLeader"
 
+	clientDoTaskTimeOut        = 165 * time.Millisecond
 	clientDoTaskSleepTime      = 5 * time.Millisecond
-	clientDoTaskTimeOut        = 50 * time.Millisecond
 	ServerCheckOpDoneSleepTime = 5 * time.Millisecond
 )
 
 type Err string
+
+// 每个Task的唯一ID
 type tag int64
 
 type PutAppendArgs struct {
 	Key   string
 	Value string
-	Op    string // "Put" or "Append"
+	Op    string // Put/Append
 	Tag   tag
 }
 
