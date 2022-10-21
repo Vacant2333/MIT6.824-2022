@@ -1,6 +1,7 @@
 package kvraft
 
 import (
+	"fmt"
 	"mit6.824/labrpc"
 	"sync"
 	"time"
@@ -59,22 +60,19 @@ func (ck *Clerk) doTasks() {
 				DPrintf("C[%v] success a task:[%v]\n", ck.clientTag, currentTask)
 				// 如果是Get会传回value,如果是Put/Append会传回"",让Append请求完成
 				currentTask.resultCh <- value
-			} else {
-				// 目前没有Leader能处理任务
-				//DPrintf("C[%v] fail a task:[%v]\n", ck.clientTag, currentTask)
 			}
 		}
 		ck.mu.Unlock()
-		time.Sleep(doTaskSleepTime)
+		time.Sleep(clientDoTaskSleepTime)
 	}
 }
 
 // 并行的向所有Servers发送某个Task
 func (ck *Clerk) askServers(op string, args interface{}) (Err, string) {
 	// 所有的reply发送到该ch
-	replyCh := make(chan interface{})
+	replyCh := make(chan interface{}, len(ck.servers))
 	// 当前reply的server
-	serverCh := make(chan int)
+	serverCh := make(chan int, len(ck.servers))
 	// 初始化reply
 	replies := make([]interface{}, len(ck.servers))
 	for index, _ := range replies {
@@ -86,6 +84,7 @@ func (ck *Clerk) askServers(op string, args interface{}) (Err, string) {
 	}
 	// 向某个Server提交Task
 	askServer := func(server int) {
+		fmt.Println("start")
 		if op == "Get" {
 			ck.servers[server].Call("KVServer.Get", args, replies[server])
 		} else {
@@ -93,8 +92,10 @@ func (ck *Clerk) askServers(op string, args interface{}) (Err, string) {
 		}
 		replyCh <- replies[server]
 		serverCh <- server
+		fmt.Println("end")
 	}
 	if ck.leaderIndex != -1 {
+		// 优先发给上一次保存的Leader
 		go askServer(ck.leaderIndex)
 	} else {
 		// 没有保存leaderIndex,从所有服务器拿结果
@@ -104,20 +105,29 @@ func (ck *Clerk) askServers(op string, args interface{}) (Err, string) {
 	}
 	// 持续检查replyCh,如果有可用的reply则直接返回
 	for count := 0; count < len(ck.servers); count++ {
-		if op == "Get" {
-			reply := (<-replyCh).(*GetReply)
+		var reply interface{}
+		select {
+		case reply = <-replyCh:
+			// 拿到了reply
+		case <-time.After(clientDoTaskTimeOut):
+			// 任务超时
+			DPrintf("C[%v] task[%v] timeout\n", ck.clientTag, args)
+			break
+		}
+		if op == "Get" && reply != nil {
+			getReply := reply.(*GetReply)
 			server := <-serverCh
-			if reply.Err == OK || reply.Err == ErrNoKey {
+			if getReply.Err == OK || getReply.Err == ErrNoKey {
 				ck.leaderIndex = server
-				return reply.Err, reply.Value
+				return getReply.Err, getReply.Value
 			}
-		} else {
+		} else if reply != nil {
 			// Put/Append task
-			reply := (<-replyCh).(*PutAppendReply)
+			putAppendReply := reply.(*PutAppendReply)
 			server := <-serverCh
-			if reply.Err == OK {
+			if putAppendReply.Err == OK {
 				ck.leaderIndex = server
-				return reply.Err, ""
+				return putAppendReply.Err, ""
 			}
 		}
 		if ck.leaderIndex != -1 {
@@ -132,7 +142,6 @@ func (ck *Clerk) askServers(op string, args interface{}) (Err, string) {
 
 func (ck *Clerk) Get(key string) string {
 	resultCh := make(chan string)
-	defer close(resultCh)
 	ck.mu.Lock()
 	ck.taskQueue = append(ck.taskQueue, task{
 		index:    ck.taskIndex + 1,
@@ -148,7 +157,6 @@ func (ck *Clerk) Get(key string) string {
 
 func (ck *Clerk) PutAppend(key string, value string, op string) {
 	resultCh := make(chan string)
-	defer close(resultCh)
 	ck.mu.Lock()
 	ck.taskQueue = append(ck.taskQueue, task{
 		index:    ck.taskIndex + 1,

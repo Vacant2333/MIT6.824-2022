@@ -26,7 +26,7 @@ type KVServer struct {
 
 	data      map[string]string // K/V数据库
 	doneTags  map[tag]bool
-	dontIndex map[int]tag
+	doneIndex map[int]tag
 }
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
@@ -49,6 +49,7 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 			}
 			done, tag := kv.checkOpDone(index)
 			if done {
+				// 任务对应的Index已经被Apply(已完成),检查完成的任务是否是自己发布的那个
 				if tag == args.Tag {
 					kv.mu.Lock()
 					value, ok := kv.data[args.Key]
@@ -65,7 +66,7 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 				}
 				break
 			}
-			time.Sleep(checkOpDoneSleepTime)
+			time.Sleep(ServerCheckOpDoneSleepTime)
 		}
 	} else {
 		kv.mu.Unlock()
@@ -89,7 +90,6 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		for {
 			nowTerm, _ := kv.rf.GetState()
 			if nowTerm != currentTerm {
-				// Leader状态变更
 				reply.Err = ErrWrongLeader
 				break
 			}
@@ -102,7 +102,7 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 				}
 				break
 			}
-			time.Sleep(checkOpDoneSleepTime)
+			time.Sleep(ServerCheckOpDoneSleepTime)
 		}
 	} else {
 		kv.mu.Unlock()
@@ -116,7 +116,7 @@ func (kv *KVServer) applier() {
 		command, _ := msg.Command.(Op)
 		kv.mu.Lock()
 		canSave := !kv.checkTag(command.Tag, true)
-		kv.dontIndex[msg.CommandIndex] = command.Tag
+		kv.doneIndex[msg.CommandIndex] = command.Tag
 		if command.Type == "Put" && canSave {
 			kv.data[command.Key] = command.Value
 		} else if command.Type == "Append" && canSave {
@@ -144,7 +144,7 @@ func (kv *KVServer) checkTag(tag tag, save bool) bool {
 func (kv *KVServer) checkOpDone(index int) (bool, tag) {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
-	tag, ok := kv.dontIndex[index]
+	tag, ok := kv.doneIndex[index]
 	return ok, tag
 }
 
@@ -158,7 +158,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 		maxraftstate: maxraftstate,
 		data:         make(map[string]string),
 		doneTags:     make(map[tag]bool),
-		dontIndex:    make(map[int]tag),
+		doneIndex:    make(map[int]tag),
 	}
 	go kv.applier()
 	return kv

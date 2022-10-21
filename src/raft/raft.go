@@ -558,7 +558,7 @@ func (rf *Raft) pushLog(server int, startTerm int) {
 		pushOk, pushReply := rf.sendAppendEntries(pushLogs, nextIndex, server)
 		if pushOk == false {
 			// 推送请求失败,可能是超时,丢包或者Leader状态改变
-			//DPrintf("L[%v] push log to F[%v] timeout or status changed!\n", rf.me, server)
+			DPrintf("L[%v] push log to F[%v] timeout or status changed!\n", rf.me, server)
 		} else if pushReply.Success {
 			// 检查推送完成后是否为最新,不为则继续Push,更新Follower的nextIndex,matchIndex
 			rf.nextIndex[server] = pushLastIndex + 1
