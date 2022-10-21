@@ -56,12 +56,11 @@ func (ck *Clerk) doTasks() {
 				// 任务完成,Err不一定是OK,也可能是ErrNoKey
 				DPrintf("C[%v] success a task:[%v]\n", ck.clientTag, currentTask)
 				ck.taskQueue = ck.taskQueue[1:]
-				//if currentTask.op == "Get" {
+				// 如果是Get会传回value,如果是Put/Append会传回"",让Append请求完成
 				currentTask.resultCh <- value
-				//}
 			} else {
-				// err == ErrNoLeader,目前没有Leader能处理任务
-				DPrintf("C[%v] fail a task:[%v]\n", ck.clientTag, currentTask)
+				// 目前没有Leader能处理任务
+				//DPrintf("C[%v] fail a task:[%v]\n", ck.clientTag, currentTask)
 			}
 		}
 		ck.mu.Unlock()

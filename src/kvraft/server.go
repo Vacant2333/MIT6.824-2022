@@ -32,7 +32,8 @@ type KVServer struct {
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	kv.mu.Lock()
-	if kv.isLeader() {
+	currentTerm, isLeader := kv.rf.GetState()
+	if isLeader {
 		DPrintf("S[%v] start Get key[%v]\n", kv.me, args.Key)
 		index, _, _ := kv.rf.Start(Op{
 			Type: "Get",
@@ -41,6 +42,12 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 		})
 		kv.mu.Unlock()
 		for {
+			nowTerm, _ := kv.rf.GetState()
+			if nowTerm != currentTerm {
+				// Leader状态变更
+				reply.Err = ErrWrongLeader
+				break
+			}
 			done, tag := kv.checkOpDone(index)
 			if done {
 				if tag == args.Tag {
@@ -67,8 +74,9 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 }
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
+	currentTerm, isLeader := kv.rf.GetState()
 	kv.mu.Lock()
-	if kv.isLeader() {
+	if isLeader {
 		index, _, _ := kv.rf.Start(Op{
 			Type:  args.Op,
 			Key:   args.Key,
@@ -79,6 +87,12 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		// 持续检查任务是否完成
 		kv.mu.Unlock()
 		for {
+			nowTerm, _ := kv.rf.GetState()
+			if nowTerm != currentTerm {
+				// Leader状态变更
+				reply.Err = ErrWrongLeader
+				break
+			}
 			done, tag := kv.checkOpDone(index)
 			if done {
 				fmt.Println(args.Op, tag, args.Tag)
@@ -95,12 +109,6 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		kv.mu.Unlock()
 		reply.Err = ErrWrongLeader
 	}
-}
-
-// 检查自己是否为Leader,Lock使用
-func (kv *KVServer) isLeader() bool {
-	_, isLeader := kv.rf.GetState()
-	return isLeader
 }
 
 func (kv *KVServer) applier() {
@@ -120,7 +128,7 @@ func (kv *KVServer) applier() {
 			} else {
 				kv.data[command.Key] = command.Value
 			}
-			fmt.Println("apply Append", msg.CommandIndex, command)
+			fmt.Println(kv.me, "apply Append", msg.CommandIndex, command)
 		}
 		kv.mu.Unlock()
 	}
