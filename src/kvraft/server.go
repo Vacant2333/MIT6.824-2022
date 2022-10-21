@@ -33,6 +33,13 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	kv.mu.Lock()
 	currentTerm, isLeader := kv.rf.GetState()
 	if isLeader {
+		if kv.checkTaskTag(args.Tag, false) {
+			// 任务已完成过
+			reply.Err = OK
+			reply.Value = kv.data[args.Key]
+			kv.mu.Unlock()
+			return
+		}
 		DPrintf("S[%v] start Get key[%v]\n", kv.me, args.Key)
 		index, _, _ := kv.rf.Start(Op{
 			Type: "Get",
@@ -47,7 +54,7 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 				reply.Err = ErrWrongLeader
 				break
 			}
-			done, tag := kv.checkOpDone(index)
+			done, tag := kv.checkTaskIndex(index)
 			if done {
 				// 任务对应的Index已经被Apply(已完成),检查完成的任务是否是自己发布的那个
 				if tag == args.Tag {
@@ -78,6 +85,13 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	currentTerm, isLeader := kv.rf.GetState()
 	kv.mu.Lock()
 	if isLeader {
+		if kv.checkTaskTag(args.Tag, false) {
+			// 任务已完成过
+			reply.Err = OK
+			kv.mu.Unlock()
+			return
+		}
+
 		index, _, _ := kv.rf.Start(Op{
 			Type:  args.Op,
 			Key:   args.Key,
@@ -93,7 +107,7 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 				reply.Err = ErrWrongLeader
 				break
 			}
-			done, tag := kv.checkOpDone(index)
+			done, tag := kv.checkTaskIndex(index)
 			if done {
 				if tag == args.Tag {
 					reply.Err = OK
@@ -115,7 +129,7 @@ func (kv *KVServer) applier() {
 		msg := <-kv.applyCh
 		command, _ := msg.Command.(Op)
 		kv.mu.Lock()
-		canSave := !kv.checkTag(command.Tag, true)
+		canSave := !kv.checkTaskTag(command.Tag, true)
 		kv.doneIndex[msg.CommandIndex] = command.Tag
 		if command.Type == "Put" && canSave {
 			kv.data[command.Key] = command.Value
@@ -131,7 +145,7 @@ func (kv *KVServer) applier() {
 }
 
 // 检查Tag是否有记录过,Lock使用
-func (kv *KVServer) checkTag(tag tag, save bool) bool {
+func (kv *KVServer) checkTaskTag(tag tag, save bool) bool {
 	_, ok := kv.doneTags[tag]
 	if save && !ok {
 		// 不存在并且save为True,存入doneTags
@@ -141,7 +155,7 @@ func (kv *KVServer) checkTag(tag tag, save bool) bool {
 }
 
 // 通过index检查任务是否完成,返回是否完成和任务的tag,Lock使用
-func (kv *KVServer) checkOpDone(index int) (bool, tag) {
+func (kv *KVServer) checkTaskIndex(index int) (bool, tag) {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
 	tag, ok := kv.doneIndex[index]

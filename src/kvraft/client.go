@@ -62,7 +62,7 @@ func (ck *Clerk) doTasks() {
 			}
 		}
 		ck.mu.Unlock()
-		//time.Sleep(clientDoTaskSleepTime)
+		time.Sleep(clientDoTaskSleepTime)
 	}
 }
 
