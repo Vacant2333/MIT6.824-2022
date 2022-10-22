@@ -15,7 +15,7 @@ const (
 	ErrWrongLeader = "ErrWrongLeader"
 	ErrNoLeader    = "ErrNoLeader"
 
-	clientDoTaskTimeOut        = 165 * time.Millisecond
+	clientDoTaskTimeOut        = 250 * time.Millisecond
 	clientDoTaskSleepTime      = 5 * time.Millisecond
 	ServerCheckOpDoneSleepTime = 5 * time.Millisecond
 )

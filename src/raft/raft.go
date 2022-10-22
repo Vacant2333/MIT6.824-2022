@@ -89,7 +89,7 @@ type Raft struct {
 }
 
 const (
-	Debug = false
+	Debug = true
 
 	Follower  = 1
 	Candidate = 2
@@ -322,6 +322,7 @@ func (rf *Raft) Kill() {
 	// 唤醒一次goroutine们让它们退出
 	rf.checkCommitCond.Signal()
 	rf.applierCond.Signal()
+	DPrintf("s[%v] killed now!\n", rf.me)
 }
 
 func (rf *Raft) killed() bool {
