@@ -89,17 +89,17 @@ type Raft struct {
 }
 
 const (
-	Debug = true
+	Debug = false
 
 	Follower  = 1
 	Candidate = 2
 	Leader    = 3
 
-	TickerSleepTime   = 75 * time.Millisecond  // Ticker 睡眠时间 ms
-	ElectionSleepTime = 25 * time.Millisecond  // 选举睡眠时间
+	TickerSleepTime   = 60 * time.Millisecond  // Ticker 睡眠时间 ms
+	ElectionSleepTime = 30 * time.Millisecond  // 选举睡眠时间
 	HeartBeatSendTime = 125 * time.Millisecond // 心跳包发送时间 ms
 
-	PushLogsSleepTime = 70 * time.Millisecond // Leader推送Log的间隔时间
+	PushLogsSleepTime = 50 * time.Millisecond // Leader推送Log的间隔时间
 
 	ElectionTimeOutMin = 300 // 选举超时时间(也用于检查是否需要开始选举) 区间
 	ElectionTimeOutMax = 400
@@ -378,9 +378,9 @@ func (rf *Raft) applier() {
 				rf.applyCh <- *log
 				rf.mu.Lock()
 				rf.lastAppliedIndex = log.CommandIndex
-				//if rf.role == Leader {
-				DPrintf("L[%v] apply X:[%v] log[%v]:%v\n", rf.me, rf.X, index, log)
-				//}
+				if rf.role == Leader {
+					DPrintf("L[%v] apply X:[%v] log[%v]:%v\n", rf.me, rf.X, index, log)
+				}
 			}
 			rf.persist()
 		}
@@ -576,7 +576,7 @@ func (rf *Raft) pushLog(server int, startTerm int) {
 		pushOk, pushReply := rf.sendAppendEntries(pushLogs, nextIndex, server)
 		if pushOk == false {
 			// 推送请求失败,可能是超时,丢包或者Leader状态改变
-			//DPrintf("L[%v] push log to F[%v] timeout or status changed!\n", rf.me, server)
+			DPrintf("L[%v] push log to F[%v] timeout or status changed!\n", rf.me, server)
 		} else if pushReply.Success {
 			// 更新Follower的nextIndex,matchIndex
 			rf.nextIndex[server] = pushLastIndex + 1
