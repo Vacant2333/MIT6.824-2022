@@ -89,7 +89,7 @@ type Raft struct {
 }
 
 const (
-	Debug = false
+	Debug = true
 
 	Follower  = 1
 	Candidate = 2
@@ -195,16 +195,18 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 
 func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	rf.mu.Lock()
-	// 丢弃Index之前的所有Log
-	if rf.X == 0 {
-		rf.Logs = rf.Logs[index-1:]
-	} else {
-		rf.Logs = rf.Logs[index-rf.X:]
+	if index > rf.X {
+		// 丢弃Index之前的所有Log
+		if rf.X == 0 {
+			rf.Logs = rf.Logs[index-1:]
+		} else {
+			rf.Logs = rf.Logs[index-rf.X:]
+		}
+		rf.SnapshotData = snapshot
+		rf.X = index
+		rf.persist()
+		DPrintf("s[%v] snapshot Index:[%v] logsLen:[%v] X:[%v]\n", rf.me, index, rf.getLogsLen(), rf.X)
 	}
-	rf.SnapshotData = snapshot
-	rf.X = index
-	rf.persist()
-	DPrintf("s[%v] snapshot Index:[%v] logsLen:[%v] X:[%v]\n", rf.me, index, rf.getLogsLen(), rf.X)
 	rf.mu.Unlock()
 }
 
@@ -353,10 +355,10 @@ func (rf *Raft) applier() {
 		rf.mu.Lock()
 		rf.commitIndex = min(rf.commitIndex, rf.getLogsLen())
 		// last保存最后一条被apply的Log的Index,chan在block的时候可能会改变rf.commitIndex
-		last := rf.lastAppliedIndex
 		if rf.commitIndex > rf.lastAppliedIndex {
 			// 有Log没有被提交上去,开始提交
-			for index := rf.lastAppliedIndex + 1; index <= rf.commitIndex && index <= rf.getLogsLen(); index++ {
+			index := rf.lastAppliedIndex + 1
+			for ; index <= rf.commitIndex && index <= rf.getLogsLen(); index++ {
 				var log *ApplyMsg
 				if index <= rf.X {
 					// 如果提交的是Snapshot的内容(index在X之前)
@@ -379,15 +381,14 @@ func (rf *Raft) applier() {
 				if rf.role == Leader {
 					DPrintf("L[%v] apply X:[%v] log[%v]:%v\n", rf.me, rf.X, index, log)
 				}
-				last = log.CommandIndex
 			}
-			rf.lastAppliedIndex = last
+			rf.lastAppliedIndex = index - 1
 			rf.persist()
 		}
-		block := rf.commitIndex == rf.lastAppliedIndex
+		block := rf.lastAppliedIndex == rf.commitIndex
 		rf.mu.Unlock()
 		if block {
-			// 如果当前lastAppliedIndex是最新,就等待唤醒
+			// 如果当前lastAppliedIndex是最新的,就等待唤醒
 			rf.applierCond.L.Lock()
 			rf.applierCond.Wait()
 			rf.applierCond.L.Unlock()
