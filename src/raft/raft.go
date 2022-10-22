@@ -89,14 +89,14 @@ type Raft struct {
 }
 
 const (
-	Debug = false
+	Debug = true
 
 	Follower  = 1
 	Candidate = 2
 	Leader    = 3
 
-	TickerSleepTime   = 60 * time.Millisecond  // Ticker 睡眠时间 ms
-	ElectionSleepTime = 30 * time.Millisecond  // 选举睡眠时间
+	TickerSleepTime   = 50 * time.Millisecond  // Ticker 睡眠时间 ms
+	ElectionSleepTime = 15 * time.Millisecond  // 选举睡眠时间
 	HeartBeatSendTime = 125 * time.Millisecond // 心跳包发送时间 ms
 
 	PushLogsSleepTime = 50 * time.Millisecond // Leader推送Log的间隔时间
