@@ -85,7 +85,7 @@ type Raft struct {
 	X               int       // Server最后一条记录在Snapshot的Log
 	SnapshotData    []byte    // Snapshot的内容
 	applierCond     sync.Cond // 当commitIndex更新时,唤醒applier
-	checkCommitCond sync.Cond
+	checkCommitCond sync.Cond // Leader的matchIndex变更时,唤醒checkCommitIndex
 }
 
 const (
@@ -95,11 +95,11 @@ const (
 	Candidate = 2
 	Leader    = 3
 
-	TickerSleepTime   = 50 * time.Millisecond  // Ticker 睡眠时间 ms
+	TickerSleepTime   = 60 * time.Millisecond  // Ticker 睡眠时间 ms
 	ElectionSleepTime = 25 * time.Millisecond  // 选举睡眠时间
-	HeartBeatSendTime = 115 * time.Millisecond // 心跳包发送时间 ms
+	HeartBeatSendTime = 125 * time.Millisecond // 心跳包发送时间 ms
 
-	PushLogsSleepTime = 30 * time.Millisecond // Leader推送Log的间隔时间
+	PushLogsSleepTime = 50 * time.Millisecond // Leader推送Log的间隔时间
 
 	ElectionTimeOutMin = 300 // 选举超时时间(也用于检查是否需要开始选举) 区间
 	ElectionTimeOutMax = 400
@@ -224,8 +224,7 @@ func (rf *Raft) sendInstallSnapshot(server int) bool {
 		// 如果接收到的RPC请求或响应中,任期号T>CurrentTerm,那么就令currentTerm等于T,并且切换状态为Follower
 		rf.increaseTerm(reply.FollowerTerm)
 		ok = false
-	}
-	if args.LeaderTerm != rf.CurrentTerm || rf.X != args.LastIncludeIndex {
+	} else if args.LeaderTerm != rf.CurrentTerm || rf.X != args.LastIncludeIndex {
 		// 状态如果变更,请求作废
 		ok = false
 	}
@@ -308,12 +307,21 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		rf.Logs = append(rf.Logs, log)
 		DPrintf("L[%v] Leader get a Start request[%v], Index:[%v] Term:[%v]\n", rf.me, command, index, term)
 		rf.persist()
+		// 收到请求后立即推送一次Log,加速同步
+		for server := 0; server < len(rf.peers); server++ {
+			if server != rf.me {
+				go rf.pushLog(server, rf.CurrentTerm)
+			}
+		}
 	}
 	return index, term, isLeader
 }
 
 func (rf *Raft) Kill() {
 	atomic.StoreInt32(&rf.dead, 1)
+	// 唤醒一次goroutine们让它们退出
+	rf.checkCommitCond.Signal()
+	rf.applierCond.Signal()
 }
 
 func (rf *Raft) killed() bool {
@@ -424,7 +432,6 @@ func (rf *Raft) startElection() {
 			}
 			// 持续向所有Peers发送心跳包,以及检查是否要提交Logs
 			go rf.sendHeartBeatsToAll(rf.CurrentTerm)
-			go rf.checkCommittedLogs(rf.CurrentTerm)
 			rf.mu.Unlock()
 			return
 		} else if rf.isHeartBeatTimeOut() {
@@ -484,19 +491,14 @@ func (rf *Raft) collectVotes() {
 	}
 }
 
-// Leader,检查是否可以更新commitIndex
-func (rf *Raft) checkCommittedLogs(startTerm int) {
+// Leader,检查是否可以更新commitIndex,如果不是Leader不会唤醒这个goroutine
+func (rf *Raft) checkCommittedLogs() {
 	for rf.killed() == false {
 		// 等待matchIndex更新后唤醒自己
 		rf.checkCommitCond.L.Lock()
 		rf.checkCommitCond.Wait()
 		rf.checkCommitCond.L.Unlock()
 		rf.mu.Lock()
-		if rf.CurrentTerm != startTerm {
-			// Leader状态变更
-			rf.mu.Unlock()
-			return
-		}
 		// 如果存在一个满足N>commitIndex的N,并且大多数的matchIndex[i]≥N成立,并且log[N].term == currentTerm成立,那么令commitIndex等于这个N
 		match := make([]int, len(rf.peers))
 		copy(match, rf.matchIndex)
@@ -765,6 +767,7 @@ func Make(peers []*labrpc.ClientEnd, me int, persister *Persister, applyCh chan 
 		checkCommitCond:  sync.Cond{L: &sync.Mutex{}},
 	}
 	rf.readPersist(persister.ReadRaftState())
+	go rf.checkCommittedLogs()
 	go rf.ticker()
 	go rf.applier()
 	return rf
