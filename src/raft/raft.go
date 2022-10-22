@@ -89,17 +89,17 @@ type Raft struct {
 }
 
 const (
-	Debug = false
+	Debug = true
 
 	Follower  = 1
 	Candidate = 2
 	Leader    = 3
 
-	TickerSleepTime   = 60 * time.Millisecond  // Ticker 睡眠时间 ms
+	TickerSleepTime   = 75 * time.Millisecond  // Ticker 睡眠时间 ms
 	ElectionSleepTime = 25 * time.Millisecond  // 选举睡眠时间
 	HeartBeatSendTime = 125 * time.Millisecond // 心跳包发送时间 ms
 
-	PushLogsSleepTime = 75 * time.Millisecond // Leader推送Log的间隔时间
+	PushLogsSleepTime = 70 * time.Millisecond // Leader推送Log的间隔时间
 
 	ElectionTimeOutMin = 300 // 选举超时时间(也用于检查是否需要开始选举) 区间
 	ElectionTimeOutMax = 400
@@ -345,6 +345,7 @@ func (rf *Raft) ticker() {
 		} else {
 			rf.mu.Unlock()
 		}
+		rf.applierCond.Signal()
 		time.Sleep(TickerSleepTime)
 	}
 }
@@ -356,8 +357,7 @@ func (rf *Raft) applier() {
 		// last保存最后一条被apply的Log的Index,chan在block的时候可能会改变rf.commitIndex
 		if rf.commitIndex > rf.lastAppliedIndex {
 			// 有Log没有被提交上去,开始提交
-			index := rf.lastAppliedIndex + 1
-			for ; index <= rf.commitIndex && index <= rf.getLogsLen(); index++ {
+			for index := rf.lastAppliedIndex + 1; index <= rf.commitIndex && index <= rf.getLogsLen(); index++ {
 				var log *ApplyMsg
 				if index <= rf.X {
 					// 如果提交的是Snapshot的内容(index在X之前)
@@ -377,11 +377,11 @@ func (rf *Raft) applier() {
 				rf.mu.Unlock()
 				rf.applyCh <- *log
 				rf.mu.Lock()
-				if rf.role == Leader {
-					DPrintf("L[%v] apply X:[%v] log[%v]:%v\n", rf.me, rf.X, index, log)
-				}
+				rf.lastAppliedIndex = log.CommandIndex
+				//if rf.role == Leader {
+				DPrintf("L[%v] apply X:[%v] log[%v]:%v\n", rf.me, rf.X, index, log)
+				//}
 			}
-			rf.lastAppliedIndex = index - 1
 			rf.persist()
 		}
 		block := rf.lastAppliedIndex == rf.commitIndex
