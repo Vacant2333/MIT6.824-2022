@@ -82,8 +82,10 @@ type Raft struct {
 	// 2C
 	lastNewEntryIndex int // (for Follower)当前任期最后一个新Log的Index,用于更新commitIndex
 	// 2D
-	X            int    // Server最后一条记录在Snapshot的Log
-	SnapshotData []byte // Snapshot的内容
+	X               int       // Server最后一条记录在Snapshot的Log
+	SnapshotData    []byte    // Snapshot的内容
+	applierCond     sync.Cond // 当commitIndex更新时,唤醒applier
+	checkCommitCond sync.Cond
 }
 
 const (
@@ -94,12 +96,10 @@ const (
 	Leader    = 3
 
 	TickerSleepTime   = 50 * time.Millisecond  // Ticker 睡眠时间 ms
-	ApplierSleepTime  = 5 * time.Millisecond   // Applier睡眠时间
 	ElectionSleepTime = 25 * time.Millisecond  // 选举睡眠时间
 	HeartBeatSendTime = 115 * time.Millisecond // 心跳包发送时间 ms
 
-	PushLogsSleepTime           = 30 * time.Millisecond // Leader推送Log的间隔时间
-	CheckCommittedLogsSleepTime = 10 * time.Millisecond // Leader更新CommitIndex的间隔时间
+	PushLogsSleepTime = 30 * time.Millisecond // Leader推送Log的间隔时间
 
 	ElectionTimeOutMin = 300 // 选举超时时间(也用于检查是否需要开始选举) 区间
 	ElectionTimeOutMax = 400
@@ -185,6 +185,8 @@ func (rf *Raft) readPersist(data []byte) {
 func (rf *Raft) updateCommitIndex(commitIndex int) {
 	DPrintf("s[%v] update commitIndex [%v]->[%v] logsLen:[%v]\n", rf.me, rf.commitIndex, commitIndex, rf.getLogsLen())
 	rf.commitIndex = min(commitIndex, rf.getLogsLen())
+	// 唤醒applier
+	rf.applierCond.Signal()
 }
 
 func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int, snapshot []byte) bool {
@@ -365,13 +367,18 @@ func (rf *Raft) applier() {
 				if rf.role == Leader {
 					DPrintf("L[%v] apply log[%v]:%v\n", rf.me, index, rf.getLog(index))
 				}
-
 			}
 			rf.lastAppliedIndex = rf.commitIndex
 			rf.persist()
 		}
+		block := rf.commitIndex == rf.lastAppliedIndex
 		rf.mu.Unlock()
-		time.Sleep(ApplierSleepTime)
+		if block {
+			// 如果当前lastAppliedIndex是最新,就等待唤醒
+			rf.applierCond.L.Lock()
+			rf.applierCond.Wait()
+			rf.applierCond.L.Unlock()
+		}
 	}
 }
 
@@ -480,8 +487,13 @@ func (rf *Raft) collectVotes() {
 // Leader,检查是否可以更新commitIndex
 func (rf *Raft) checkCommittedLogs(startTerm int) {
 	for rf.killed() == false {
+		// 等待matchIndex更新后唤醒自己
+		rf.checkCommitCond.L.Lock()
+		rf.checkCommitCond.Wait()
+		rf.checkCommitCond.L.Unlock()
 		rf.mu.Lock()
 		if rf.CurrentTerm != startTerm {
+			// Leader状态变更
 			rf.mu.Unlock()
 			return
 		}
@@ -504,7 +516,6 @@ func (rf *Raft) checkCommittedLogs(startTerm int) {
 			rf.updateCommitIndex(N)
 		}
 		rf.mu.Unlock()
-		time.Sleep(CheckCommittedLogsSleepTime)
 	}
 }
 
@@ -513,7 +524,7 @@ func (rf *Raft) pushLogsToFollower(server int, startTerm int) {
 	for rf.killed() == false {
 		rf.mu.Lock()
 		if startTerm != rf.CurrentTerm {
-			// 如果不是Leader了,停止推送Logs
+			// 如果Leader状态改变,停止推送Logs
 			DPrintf("L[%v] stop push entry to F[%v], Role:[%v] Term:[%v] startTerm:[%v]\n", rf.me, server, rf.role, rf.CurrentTerm, startTerm)
 			rf.mu.Unlock()
 			return
@@ -538,10 +549,10 @@ func (rf *Raft) pushLog(server int, startTerm int) {
 	if nextIndex <= rf.X && rf.X != 0 {
 		DPrintf("L[%v] push Snapshot to s[%v]\n", rf.me, server)
 		// Leader没有用于同步的Log,推送Snapshot,第X条Log只能用于校验,其内容在Snapshot里
-		ok := rf.sendInstallSnapshot(server)
-		if ok {
+		if rf.sendInstallSnapshot(server) {
 			rf.matchIndex[server] = rf.X
 			rf.nextIndex[server] = rf.X + 1
+			rf.checkCommitCond.Signal()
 		}
 	} else {
 		// 正常追加
@@ -560,12 +571,13 @@ func (rf *Raft) pushLog(server int, startTerm int) {
 			// 推送请求失败,可能是超时,丢包或者Leader状态改变
 			DPrintf("L[%v] push log to F[%v] timeout or status changed!\n", rf.me, server)
 		} else if pushReply.Success {
-			// 检查推送完成后是否为最新,不为则继续Push,更新Follower的nextIndex,matchIndex
+			// 更新Follower的nextIndex,matchIndex
 			rf.nextIndex[server] = pushLastIndex + 1
 			rf.matchIndex[server] = pushLastIndex
+			rf.checkCommitCond.Signal()
 			DPrintf("L[%v] push log to F[%v] success,Leader LogsLen:[%v] pushLast:[%v] pushLen:[%v]\n", rf.me, server, rf.getLogsLen(), pushLastIndex, len(pushLogs))
 		} else {
-			// 校验失败但是请求成功,减少nextIndex且重试
+			// 校验失败但是请求成功,减少nextIndex
 			if pushReply.ConflictTerm != -1 {
 				flag := false
 				// 如果Leader有ConflictTerm的Log,将nextIndex设为对应Term中的最后一条的下一条
@@ -749,6 +761,8 @@ func Make(peers []*labrpc.ClientEnd, me int, persister *Persister, applyCh chan 
 		heartBeatTimeOut: time.Now().Add(getRandElectionTimeOut()),
 		applyCh:          applyCh,
 		Logs:             make([]ApplyMsg, 0),
+		applierCond:      sync.Cond{L: &sync.Mutex{}},
+		checkCommitCond:  sync.Cond{L: &sync.Mutex{}},
 	}
 	rf.readPersist(persister.ReadRaftState())
 	go rf.ticker()
