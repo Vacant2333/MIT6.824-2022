@@ -2,6 +2,7 @@ package raft
 
 import (
 	"bytes"
+	"fmt"
 	"mit6.824/labgob"
 	"mit6.824/labrpc"
 	"sort"
@@ -99,7 +100,7 @@ const (
 	ElectionSleepTime = 25 * time.Millisecond  // 选举睡眠时间
 	HeartBeatSendTime = 125 * time.Millisecond // 心跳包发送时间 ms
 
-	PushLogsSleepTime = 50 * time.Millisecond // Leader推送Log的间隔时间
+	PushLogsSleepTime = 65 * time.Millisecond // Leader推送Log的间隔时间
 
 	ElectionTimeOutMin = 300 // 选举超时时间(也用于检查是否需要开始选举) 区间
 	ElectionTimeOutMax = 400
@@ -184,7 +185,8 @@ func (rf *Raft) readPersist(data []byte) {
 // 更新自己的commitIndex,用之前先检查,并且要Lock
 func (rf *Raft) updateCommitIndex(commitIndex int) {
 	DPrintf("s[%v] update commitIndex [%v]->[%v] logsLen:[%v]\n", rf.me, rf.commitIndex, commitIndex, rf.getLogsLen())
-	rf.commitIndex = min(commitIndex, rf.getLogsLen())
+	//rf.commitIndex = min(commitIndex, rf.getLogsLen())
+	rf.commitIndex = commitIndex
 	// commitIndex更改,唤醒applier
 	rf.applierCond.Signal()
 }
@@ -271,18 +273,21 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		if rf.getLogsLen() == 0 {
 			// 自己没有Log
 			reply.VoteGranted = true
+			fmt.Println(rf.me, 1)
 		} else if args.CandidateLastLogTerm > rf.getLog(-1).CommandTerm {
 			// 如果两份日志最后的条目的任期号不同,那么任期号大的日志更加新,在这里Candidate的最后一个Term大于Follower
 			reply.VoteGranted = true
+			fmt.Println(rf.me, 2, rf.getLog(-1))
 		} else if args.CandidateLastLogTerm == rf.getLog(-1).CommandTerm && args.CandidateLastLogIndex >= rf.getLogsLen() {
 			// 如果两份日志最后的条目任期号相同,那么日志比较长的那个就更加新
 			reply.VoteGranted = true
+			fmt.Println(rf.me, 3, rf.getLog(-1))
 		}
 		if reply.VoteGranted {
 			rf.heartBeatTimeOut = time.Now().Add(getRandElectionTimeOut())
 			rf.VotedFor = args.CandidateIndex
 			rf.persist()
-			DPrintf("F[%v] vote to C[%v] args:[%v]\n", rf.me, args.CandidateIndex, args)
+			DPrintf("F[%v] vote to C[%v] args:[%v] logsLen:[%v]\n", rf.me, args.CandidateIndex, args, rf.getLogsLen())
 		}
 	}
 }
@@ -353,7 +358,7 @@ func (rf *Raft) ticker() {
 func (rf *Raft) applier() {
 	for rf.killed() == false {
 		rf.mu.Lock()
-		rf.commitIndex = min(rf.commitIndex, rf.getLogsLen())
+		//rf.commitIndex = min(rf.commitIndex, rf.getLogsLen())
 		// last保存最后一条被apply的Log的Index,chan在block的时候可能会改变rf.commitIndex
 		if rf.commitIndex > rf.lastAppliedIndex {
 			// 有Log没有被提交上去,开始提交
@@ -418,7 +423,7 @@ func (rf *Raft) startElection() {
 		voteCount := rf.getGrantedVotes()
 		if rf.role == Follower {
 			// 1.其他人成为了Leader,Candidate转为了Follower
-			DPrintf("C[%v] another server is leader now, Term:[%v]\n", rf.me, rf.CurrentTerm)
+			DPrintf("C[%v] another server is a Leader now, Term:[%v]\n", rf.me, rf.CurrentTerm)
 			rf.mu.Unlock()
 			return
 		} else if voteCount > len(rf.peers)/2 {
@@ -577,7 +582,7 @@ func (rf *Raft) pushLog(server int, startTerm int) {
 		pushOk, pushReply := rf.sendAppendEntries(pushLogs, nextIndex, server)
 		if pushOk == false {
 			// 推送请求失败,可能是超时,丢包或者Leader状态改变
-			DPrintf("L[%v] push log to F[%v] timeout or status changed!\n", rf.me, server)
+			//DPrintf("L[%v] push log to F[%v] timeout or status changed!\n", rf.me, server)
 		} else if pushReply.Success {
 			// 更新Follower的nextIndex,matchIndex
 			rf.nextIndex[server] = pushLastIndex + 1
@@ -701,15 +706,17 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 		reply.Success = false
 		reply.ConflictIndex = 1
 		reply.ConflictTerm = -1
-	} else if args.PrevLogIndex == 0 {
-		// 如果是第一条Log不校验
-		reply.Success = true
-		if len(args.Logs) > 0 {
-			// 防止空的包延迟到达后清空了Follower的Log
-			rf.Logs = args.Logs
-			rf.persist()
-		}
-	} else if args.PrevLogIndex <= rf.getLogsLen() && rf.getLog(args.PrevLogIndex).CommandTerm == args.PrevLogTerm {
+	} else
+	//if args.PrevLogIndex == 0 {
+	//	// 如果是第一条Log不校验
+	//	reply.Success = true
+	//	if len(args.Logs) > 0 {
+	//		// 防止空的包延迟到达后清空了Follower的Log
+	//		rf.Logs = args.Logs
+	//		rf.persist()
+	//	}
+	//} else
+	if args.PrevLogIndex == 0 || (args.PrevLogIndex <= rf.getLogsLen() && rf.getLog(args.PrevLogIndex).CommandTerm == args.PrevLogTerm) {
 		// 校验正常,逐条追加(心跳包也会走到这里)
 		reply.Success = true
 		for _, log := range args.Logs {
@@ -748,7 +755,7 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 	// 校验成功才会为True,只有这种情况能对commitIndex有操作
 	if reply.Success {
 		// 更新最后一条新Entry的下标,如果校验失败不会走到这里
-		if len(args.Logs) > 0 && args.Logs[len(args.Logs)-1].CommandIndex >= rf.commitIndex {
+		if len(args.Logs) > 0 && args.Logs[len(args.Logs)-1].CommandIndex >= rf.lastNewEntryIndex {
 			rf.lastNewEntryIndex = args.Logs[len(args.Logs)-1].CommandIndex
 		}
 		// 更新Follower的commitIndex
