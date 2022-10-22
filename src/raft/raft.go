@@ -89,7 +89,7 @@ type Raft struct {
 }
 
 const (
-	Debug = true
+	Debug = false
 
 	Follower  = 1
 	Candidate = 2
@@ -185,7 +185,7 @@ func (rf *Raft) readPersist(data []byte) {
 func (rf *Raft) updateCommitIndex(commitIndex int) {
 	DPrintf("s[%v] update commitIndex [%v]->[%v] logsLen:[%v]\n", rf.me, rf.commitIndex, commitIndex, rf.getLogsLen())
 	rf.commitIndex = min(commitIndex, rf.getLogsLen())
-	// 唤醒applier
+	// commitIndex更改,唤醒applier
 	rf.applierCond.Signal()
 }
 
@@ -224,7 +224,8 @@ func (rf *Raft) sendInstallSnapshot(server int) bool {
 		// 如果接收到的RPC请求或响应中,任期号T>CurrentTerm,那么就令currentTerm等于T,并且切换状态为Follower
 		rf.increaseTerm(reply.FollowerTerm)
 		ok = false
-	} else if args.LeaderTerm != rf.CurrentTerm || rf.X != args.LastIncludeIndex {
+	}
+	if args.LeaderTerm != rf.CurrentTerm || rf.X != args.LastIncludeIndex {
 		// 状态如果变更,请求作废
 		ok = false
 	}
@@ -351,6 +352,8 @@ func (rf *Raft) applier() {
 	for rf.killed() == false {
 		rf.mu.Lock()
 		rf.commitIndex = min(rf.commitIndex, rf.getLogsLen())
+		// last保存最后一条被apply的Log的Index,chan在block的时候可能会改变rf.commitIndex
+		last := rf.lastAppliedIndex
 		if rf.commitIndex > rf.lastAppliedIndex {
 			// 有Log没有被提交上去,开始提交
 			for index := rf.lastAppliedIndex + 1; index <= rf.commitIndex && index <= rf.getLogsLen(); index++ {
@@ -374,10 +377,11 @@ func (rf *Raft) applier() {
 				rf.applyCh <- *log
 				rf.mu.Lock()
 				if rf.role == Leader {
-					DPrintf("L[%v] apply log[%v]:%v\n", rf.me, index, rf.getLog(index))
+					DPrintf("L[%v] apply X:[%v] log[%v]:%v\n", rf.me, rf.X, index, log)
 				}
+				last = log.CommandIndex
 			}
-			rf.lastAppliedIndex = rf.commitIndex
+			rf.lastAppliedIndex = last
 			rf.persist()
 		}
 		block := rf.commitIndex == rf.lastAppliedIndex
@@ -550,13 +554,13 @@ func (rf *Raft) pushLog(server int, startTerm int) {
 	}
 	nextIndex := rf.nextIndex[server]
 	if nextIndex <= rf.X && rf.X != 0 {
-		DPrintf("L[%v] push Snapshot to s[%v]\n", rf.me, server)
 		// Leader没有用于同步的Log,推送Snapshot,第X条Log只能用于校验,其内容在Snapshot里
 		if rf.sendInstallSnapshot(server) {
 			rf.matchIndex[server] = rf.X
 			rf.nextIndex[server] = rf.X + 1
 			rf.checkCommitCond.Signal()
 		}
+		DPrintf("L[%v] push Snapshot to s[%v] X:[%v]\n", rf.me, server, rf.X)
 	} else {
 		// 正常追加
 		var pushLogs []ApplyMsg
