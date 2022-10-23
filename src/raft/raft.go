@@ -89,17 +89,18 @@ type Raft struct {
 }
 
 const (
-	Debug = true
+	Debug = false
 
 	Follower  = 1
 	Candidate = 2
 	Leader    = 3
 
-	TickerSleepTime   = 50 * time.Millisecond  // Ticker 睡眠时间 ms
-	ElectionSleepTime = 15 * time.Millisecond  // 选举睡眠时间
-	HeartBeatSendTime = 125 * time.Millisecond // 心跳包发送时间 ms
+	TickerSleepTime   = 65 * time.Millisecond  // Ticker 睡眠时间 ms
+	ElectionSleepTime = 20 * time.Millisecond  // 选举睡眠时间
+	HeartBeatSendTime = 130 * time.Millisecond // 心跳包发送时间 ms
 
-	PushLogsSleepTime = 50 * time.Millisecond // Leader推送Log的间隔时间
+	PushLogsSleepTime = 75 * time.Millisecond // Leader推送Log的间隔时间
+	WakeCondSleepTime = 500 * time.Millisecond
 
 	ElectionTimeOutMin = 300 // 选举超时时间(也用于检查是否需要开始选举) 区间
 	ElectionTimeOutMax = 400
@@ -322,9 +323,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 
 func (rf *Raft) Kill() {
 	atomic.StoreInt32(&rf.dead, 1)
-	// 唤醒一次goroutine让它们退出
-	rf.checkCommitCond.Signal()
-	rf.applierCond.Signal()
 	DPrintf("s[%v] killed now!\n", rf.me)
 }
 
@@ -345,8 +343,17 @@ func (rf *Raft) ticker() {
 		} else {
 			rf.mu.Unlock()
 		}
-		rf.applierCond.Signal()
 		time.Sleep(TickerSleepTime)
+	}
+}
+
+// cond唤醒器,防止状态改变时唤醒cond失败(可能不在wait中)
+func (rf *Raft) wakeCond() {
+	for rf.killed() == false {
+		// 防止cond没有收到状态改变时的Signal,仅出现于极个别情况
+		rf.checkCommitCond.Signal()
+		rf.applierCond.Signal()
+		time.Sleep(WakeCondSleepTime)
 	}
 }
 
@@ -558,6 +565,7 @@ func (rf *Raft) pushLog(server int, startTerm int) {
 		if rf.sendInstallSnapshot(server) {
 			rf.matchIndex[server] = rf.X
 			rf.nextIndex[server] = rf.X + 1
+			// matchIndex状态改变,唤醒checkCommit
 			rf.checkCommitCond.Signal()
 		}
 		DPrintf("L[%v] push Snapshot to s[%v] X:[%v]\n", rf.me, server, rf.X)
@@ -581,6 +589,7 @@ func (rf *Raft) pushLog(server int, startTerm int) {
 			// 更新Follower的nextIndex,matchIndex
 			rf.nextIndex[server] = pushLastIndex + 1
 			rf.matchIndex[server] = pushLastIndex
+			// matchIndex状态改变,唤醒checkCommit
 			rf.checkCommitCond.Signal()
 			DPrintf("L[%v] push log to F[%v] success,Leader LogsLen:[%v] pushLast:[%v] pushLen:[%v]\n", rf.me, server, rf.getLogsLen(), pushLastIndex, len(pushLogs))
 		} else {
@@ -764,6 +773,7 @@ func Make(peers []*labrpc.ClientEnd, me int, persister *Persister, applyCh chan 
 		checkCommitCond:  sync.Cond{L: &sync.Mutex{}},
 	}
 	rf.readPersist(persister.ReadRaftState())
+	go rf.wakeCond()
 	go rf.checkCommittedLogs()
 	go rf.ticker()
 	go rf.applier()
