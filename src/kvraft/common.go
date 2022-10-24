@@ -8,16 +8,15 @@ import (
 )
 
 const (
-	Debug = true
+	Debug = false
 
 	OK             = "OK"
 	ErrNoKey       = "ErrNoKey"
 	ErrWrongLeader = "ErrWrongLeader"
 	ErrNoLeader    = "ErrNoLeader"
 
-	clientDoTaskTimeOut        = 200 * time.Millisecond
-	clientDoTaskSleepTime      = 4 * time.Millisecond
-	ServerCheckOpDoneSleepTime = 4 * time.Millisecond
+	clientDoTaskTimeOut   = 500 * time.Millisecond
+	clientDoTaskSleepTime = 10 * time.Millisecond
 )
 
 type Err string

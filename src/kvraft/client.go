@@ -9,7 +9,7 @@ import (
 type Clerk struct {
 	servers     []*labrpc.ClientEnd
 	mu          sync.Mutex
-	taskQueue   []task
+	taskQueue   chan task
 	taskIndex   int
 	clientTag   int64
 	leaderIndex int
@@ -29,6 +29,7 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 func (ck *Clerk) doTasks() {
 	for {
 		ck.mu.Lock()
+		noLeaderNow := false
 		if len(ck.taskQueue) > 0 {
 			// 获得当前的task
 			currentTask := ck.taskQueue[0]
@@ -59,10 +60,15 @@ func (ck *Clerk) doTasks() {
 				DPrintf("C[%v] success a task:[%v]\n", ck.clientTag, currentTask)
 				// 如果是Get会传回value,如果是Put/Append会传回"",让Append请求完成
 				currentTask.resultCh <- value
+			} else {
+				noLeaderNow = true
 			}
 		}
 		ck.mu.Unlock()
-		time.Sleep(clientDoTaskSleepTime)
+		if noLeaderNow {
+			// 只有在没有Leader的时候才sleep
+			time.Sleep(clientDoTaskSleepTime)
+		}
 	}
 }
 
@@ -108,7 +114,7 @@ func (ck *Clerk) askServers(op string, args interface{}) (Err, string) {
 			// 拿到了reply
 		case <-time.After(clientDoTaskTimeOut):
 			// 任务超时
-			DPrintf("C[%v] task[%v] timeout\n", ck.clientTag, args)
+			//DPrintf("C[%v] task[%v] timeout\n", ck.clientTag, args)
 			break
 		}
 		if op == "Get" && reply != nil {
