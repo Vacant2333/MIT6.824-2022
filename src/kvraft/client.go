@@ -18,7 +18,7 @@ type Clerk struct {
 func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck := &Clerk{
 		servers:     servers,
-		taskQueue:   make([]task, 0),
+		taskQueue:   make(chan task),
 		clientTag:   nRand(),
 		leaderIndex: -1,
 	}
@@ -28,46 +28,36 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 
 func (ck *Clerk) doTasks() {
 	for {
-		ck.mu.Lock()
-		noLeaderNow := false
-		if len(ck.taskQueue) > 0 {
-			// 获得当前的task
-			currentTask := ck.taskQueue[0]
-			DPrintf("C[%v] start a task:[%v]\n", ck.clientTag, currentTask)
-			var args interface{}
-			// 根据任务类型设置args
-			if currentTask.op == "Get" {
-				// Get task
-				args = &GetArgs{
-					Key: currentTask.key,
-					Tag: currentTask.taskTag,
-				}
-			} else {
-				// Put/Append task
-				args = &PutAppendArgs{
-					Key:   currentTask.key,
-					Value: currentTask.value,
-					Op:    currentTask.op,
-					Tag:   currentTask.taskTag,
-				}
+		currentTask := <-ck.taskQueue
+		// 获得当前的task
+		DPrintf("C[%v] start a task:[%v]\n", ck.clientTag, currentTask)
+		var args interface{}
+		// 根据任务类型设置args
+		if currentTask.op == "Get" {
+			// Get task
+			args = &GetArgs{
+				Key: currentTask.key,
+				Tag: currentTask.taskTag,
 			}
-			ck.mu.Unlock()
+		} else {
+			// Put/Append task
+			args = &PutAppendArgs{
+				Key:   currentTask.key,
+				Value: currentTask.value,
+				Op:    currentTask.op,
+				Tag:   currentTask.taskTag,
+			}
+		}
+		for {
 			err, value := ck.askServers(currentTask.op, args)
-			ck.mu.Lock()
 			if err != ErrNoLeader {
-				// 任务完成,从队列中删除这条任务,Err不一定是OK,也可能是ErrNoKey
-				ck.taskQueue = ck.taskQueue[1:]
+				// 任务完成,Err不一定是OK,也可能是ErrNoKey
 				DPrintf("C[%v] success a task:[%v]\n", ck.clientTag, currentTask)
 				// 如果是Get会传回value,如果是Put/Append会传回"",让Append请求完成
 				currentTask.resultCh <- value
-			} else {
-				noLeaderNow = true
+				break
 			}
-		}
-		ck.mu.Unlock()
-		if noLeaderNow {
-			// 只有在没有Leader的时候才sleep
-			time.Sleep(clientDoTaskSleepTime)
+			time.Sleep(clientNoLeaderSleepTime)
 		}
 	}
 }
@@ -146,13 +136,13 @@ func (ck *Clerk) askServers(op string, args interface{}) (Err, string) {
 func (ck *Clerk) Get(key string) string {
 	resultCh := make(chan string)
 	ck.mu.Lock()
-	ck.taskQueue = append(ck.taskQueue, task{
+	ck.taskQueue <- task{
 		index:    ck.taskIndex + 1,
 		op:       "Get",
 		key:      key,
 		resultCh: resultCh,
 		taskTag:  tag(ck.clientTag + int64(ck.taskIndex) + 1),
-	})
+	}
 	ck.taskIndex++
 	ck.mu.Unlock()
 	return <-resultCh
@@ -161,17 +151,17 @@ func (ck *Clerk) Get(key string) string {
 func (ck *Clerk) PutAppend(key string, value string, op string) {
 	resultCh := make(chan string)
 	ck.mu.Lock()
-	ck.taskQueue = append(ck.taskQueue, task{
+	ck.taskQueue <- task{
 		index:    ck.taskIndex + 1,
 		op:       op,
 		key:      key,
 		value:    value,
 		resultCh: resultCh,
 		taskTag:  tag(ck.clientTag + int64(ck.taskIndex) + 1),
-	})
+	}
 	ck.taskIndex++
 	ck.mu.Unlock()
-	// 任务完成之前要Block住
+	// 等待任务完成
 	<-resultCh
 }
 

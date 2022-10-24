@@ -15,8 +15,8 @@ const (
 	ErrWrongLeader = "ErrWrongLeader"
 	ErrNoLeader    = "ErrNoLeader"
 
-	clientDoTaskTimeOut   = 500 * time.Millisecond
-	clientDoTaskSleepTime = 10 * time.Millisecond
+	clientDoTaskTimeOut     = 500 * time.Millisecond
+	clientNoLeaderSleepTime = 30 * time.Millisecond
 )
 
 type Err string
