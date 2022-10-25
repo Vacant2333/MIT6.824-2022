@@ -6,12 +6,21 @@ import (
 	"time"
 )
 
+type task struct {
+	index    int
+	op       string
+	key      string
+	value    string
+	taskTag  tag
+	resultCh chan string
+}
+
 type Clerk struct {
 	servers     []*labrpc.ClientEnd
 	mu          sync.Mutex
 	taskQueue   chan task
 	taskIndex   int
-	clientTag   int64
+	clientTag   tag
 	leaderIndex int
 }
 
@@ -26,6 +35,7 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	return ck
 }
 
+// 持续通过ck.taskQueue接受新的任务
 func (ck *Clerk) doTasks() {
 	for {
 		currentTask := <-ck.taskQueue
@@ -104,7 +114,7 @@ func (ck *Clerk) askServers(op string, args interface{}) (Err, string) {
 			// 拿到了reply
 		case <-time.After(clientDoTaskTimeOut):
 			// 任务超时
-			//DPrintf("C[%v] task[%v] timeout\n", ck.clientTag, args)
+			DPrintf("C[%v] task[%v] timeout\n", ck.clientTag, args)
 			break
 		}
 		if op == "Get" && reply != nil {

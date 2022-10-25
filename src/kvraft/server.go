@@ -18,15 +18,14 @@ type Op struct {
 type KVServer struct {
 	mu           sync.Mutex
 	me           int
-	rf           *raft.Raft
-	applyCh      chan raft.ApplyMsg
-	dead         int32
+	rf           *raft.Raft         // 该状态机对应的Raft
+	applyCh      chan raft.ApplyMsg // 从Raft发送过来的Log
+	dead         int32              // 同Raft的dead
 	maxraftstate int
-
-	data      map[string]string // K/V数据库
-	doneTasks map[tag]bool
-	doneIndex map[int]tag
-	doneCond  map[int]*sync.Cond
+	kv           map[string]string // K/V数据
+	doneTag      map[tag]bool
+	doneIndex    map[int]tag
+	doneCond     map[int]*sync.Cond
 }
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
@@ -35,7 +34,7 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	if done {
 		// 任务已完成过
 		reply.Err = OK
-		reply.Value = kv.data[args.Key]
+		reply.Value = kv.kv[args.Key]
 	} else if !isLeader {
 		// 不是Leader
 		reply.Err = ErrWrongLeader
@@ -50,7 +49,7 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 		doneTag := kv.getTaskTag(index)
 		// 任务对应的Index已经被Apply(已完成),检查完成的任务是否是自己发布的那个
 		if doneTag == args.Tag {
-			value, ok := kv.data[args.Key]
+			value, ok := kv.kv[args.Key]
 			if ok {
 				reply.Err = OK
 				reply.Value = value
@@ -92,7 +91,7 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	kv.mu.Unlock()
 }
 
-// 开始执行一条Log,Lock使用 已完成过该任务,是否为Leader,新任务的index
+// 开始执行一条Log,Lock使用(已完成过该任务,是否为Leader,新任务的index)
 func (kv *KVServer) startOp(op string, key string, value string, opTag tag) (bool, bool, int) {
 	if kv.haveDoneTask(opTag, false) {
 		// 这个任务已经完成过一次
@@ -123,12 +122,12 @@ func (kv *KVServer) applier() {
 		canSave := !kv.haveDoneTask(command.Tag, true)
 		kv.doneIndex[msg.CommandIndex] = command.Tag
 		if command.Type == "Put" && canSave {
-			kv.data[command.Key] = command.Value
+			kv.kv[command.Key] = command.Value
 		} else if command.Type == "Append" && canSave {
-			if _, ok := kv.data[command.Key]; ok {
-				kv.data[command.Key] += command.Value
+			if _, ok := kv.kv[command.Key]; ok {
+				kv.kv[command.Key] += command.Value
 			} else {
-				kv.data[command.Key] = command.Value
+				kv.kv[command.Key] = command.Value
 			}
 		}
 		if cond, ok := kv.doneCond[msg.CommandIndex]; ok {
@@ -140,15 +139,15 @@ func (kv *KVServer) applier() {
 
 // 检查是否有完成过某个任务,Lock使用
 func (kv *KVServer) haveDoneTask(tag tag, save bool) bool {
-	_, ok := kv.doneTasks[tag]
+	_, ok := kv.doneTag[tag]
 	if save && !ok {
 		// 不存在并且save为True,存入doneTags
-		kv.doneTasks[tag] = true
+		kv.doneTag[tag] = true
 	}
 	return ok
 }
 
-// 通过index检查任务是否完成,返回是否完成和任务的tag,Lock使用
+// 通过任务的下标获得任务对应的tag
 func (kv *KVServer) getTaskTag(index int) tag {
 	tag, _ := kv.doneIndex[index]
 	return tag
@@ -162,8 +161,8 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 		rf:           raft.Make(servers, me, persister, applyCh),
 		applyCh:      applyCh,
 		maxraftstate: maxraftstate,
-		data:         make(map[string]string),
-		doneTasks:    make(map[tag]bool),
+		kv:           make(map[string]string),
+		doneTag:      make(map[tag]bool),
 		doneIndex:    make(map[int]tag),
 		doneCond:     make(map[int]*sync.Cond),
 	}

@@ -8,15 +8,15 @@ import (
 )
 
 const (
-	Debug = false
+	Debug = true
 
 	OK             = "OK"
 	ErrNoKey       = "ErrNoKey"
 	ErrWrongLeader = "ErrWrongLeader"
 	ErrNoLeader    = "ErrNoLeader"
 
-	clientDoTaskTimeOut     = 500 * time.Millisecond
-	clientNoLeaderSleepTime = 30 * time.Millisecond
+	clientDoTaskTimeOut     = 250 * time.Millisecond
+	clientNoLeaderSleepTime = 50 * time.Millisecond
 )
 
 type Err string
@@ -45,24 +45,16 @@ type GetReply struct {
 	Value string
 }
 
-type task struct {
-	index    int
-	op       string
-	key      string
-	value    string
-	taskTag  tag
-	resultCh chan string
-}
-
 func DPrintf(format string, a ...interface{}) {
 	if Debug {
 		log.Printf(format, a...)
 	}
 }
 
-func nRand() int64 {
+// 获得一个int64的随机数(Client的Tag)
+func nRand() tag {
 	max := big.NewInt(int64(1) << 62)
 	bigx, _ := rand.Int(rand.Reader, max)
 	x := bigx.Int64()
-	return x
+	return tag(x)
 }

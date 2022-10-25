@@ -28,5 +28,5 @@ func max(a int, b int) int {
 
 // 获得一个随机选举超时时间
 func getRandElectionTimeOut() time.Duration {
-	return time.Duration((rand.Int()%(ElectionTimeOutMax-ElectionTimeOutMin))+ElectionTimeOutMin) * time.Millisecond
+	return time.Duration((rand.Int()%(electionTimeOutMax-electionTimeOutMin))+electionTimeOutMin) * time.Millisecond
 }
