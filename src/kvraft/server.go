@@ -9,10 +9,10 @@ import (
 )
 
 type Op struct {
-	Type  string
+	Type  string // 任务类型
 	Key   string
 	Value string
-	Tag   tag
+	Tag   tag // 任务的唯一ID
 }
 
 type KVServer struct {
@@ -21,11 +21,14 @@ type KVServer struct {
 	rf           *raft.Raft         // 该状态机对应的Raft
 	applyCh      chan raft.ApplyMsg // 从Raft发送过来的Log
 	dead         int32              // 同Raft的dead
-	maxraftstate int
-	kv           map[string]string // K/V数据
-	doneTag      map[tag]bool
-	doneIndex    map[int]tag
-	doneCond     map[int]*sync.Cond
+	maxRaftState int                // 当Raft的RaftStateSize接近该值时启动Snapshot
+	// 3A
+	kv        map[string]string // K/V数据
+	doneTag   map[tag]bool
+	doneIndex map[int]tag
+	doneCond  map[int]*sync.Cond
+	// 3B
+	checkSnapshotCond sync.Cond
 }
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
@@ -46,7 +49,7 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 		cond.Wait()
 		cond.L.Unlock()
 		kv.mu.Lock()
-		doneTag := kv.getTaskTag(index)
+		doneTag, _ := kv.doneIndex[index]
 		// 任务对应的Index已经被Apply(已完成),检查完成的任务是否是自己发布的那个
 		if doneTag == args.Tag {
 			value, ok := kv.kv[args.Key]
@@ -81,7 +84,7 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		cond.Wait()
 		cond.L.Unlock()
 		kv.mu.Lock()
-		doneTag := kv.getTaskTag(index)
+		doneTag, _ := kv.doneIndex[index]
 		if doneTag == args.Tag {
 			reply.Err = OK
 		} else {
@@ -114,6 +117,7 @@ func (kv *KVServer) startOp(op string, key string, value string, opTag tag) (boo
 	return false, true, index
 }
 
+// 持续接受来自Raft的Log
 func (kv *KVServer) applier() {
 	for kv.killed() == false {
 		msg := <-kv.applyCh
@@ -137,6 +141,13 @@ func (kv *KVServer) applier() {
 	}
 }
 
+// apply新Log时,检查是否需要Snapshot
+func (kv *KVServer) checkSnapshot() {
+	for kv.killed() == false {
+
+	}
+}
+
 // 检查是否有完成过某个任务,Lock使用
 func (kv *KVServer) haveDoneTask(tag tag, save bool) bool {
 	_, ok := kv.doneTag[tag]
@@ -147,24 +158,21 @@ func (kv *KVServer) haveDoneTask(tag tag, save bool) bool {
 	return ok
 }
 
-// 通过任务的下标获得任务对应的tag
-func (kv *KVServer) getTaskTag(index int) tag {
-	tag, _ := kv.doneIndex[index]
-	return tag
-}
-
-func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister, maxraftstate int) *KVServer {
+func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister, maxRaftState int) *KVServer {
 	labgob.Register(Op{})
 	applyCh := make(chan raft.ApplyMsg)
 	kv := &KVServer{
 		me:           me,
 		rf:           raft.Make(servers, me, persister, applyCh),
 		applyCh:      applyCh,
-		maxraftstate: maxraftstate,
+		maxRaftState: maxRaftState,
 		kv:           make(map[string]string),
 		doneTag:      make(map[tag]bool),
 		doneIndex:    make(map[int]tag),
 		doneCond:     make(map[int]*sync.Cond),
+	}
+	if maxRaftState != -1 {
+		go kv.checkSnapshot()
 	}
 	go kv.applier()
 	return kv

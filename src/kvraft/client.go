@@ -7,21 +7,21 @@ import (
 )
 
 type task struct {
-	index    int
-	op       string
-	key      string
-	value    string
-	taskTag  tag
-	resultCh chan string
+	index    int         // 对于当前Client的任务的Index
+	op       string      // 任务类型
+	key      string      // Get/PutAppend参数
+	value    string      // PutAppend参数
+	taskTag  tag         // 任务的唯一ID
+	resultCh chan string // 传Get的返回值和卡住Get/PutAppend方法
 }
 
 type Clerk struct {
 	servers     []*labrpc.ClientEnd
 	mu          sync.Mutex
-	taskQueue   chan task
-	taskIndex   int
-	clientTag   tag
-	leaderIndex int
+	taskQueue   chan task // 任务队列
+	taskIndex   int       // 最后一条任务的下标
+	clientTag   tag       // Client的唯一标识
+	leaderIndex int       // 上一次成功完成任务的Leader的Index,没有的话为-1
 }
 
 func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
@@ -39,7 +39,6 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 func (ck *Clerk) doTasks() {
 	for {
 		currentTask := <-ck.taskQueue
-		// 获得当前的task
 		DPrintf("C[%v] start a task:[%v]\n", ck.clientTag, currentTask)
 		var args interface{}
 		// 根据任务类型设置args
@@ -143,22 +142,7 @@ func (ck *Clerk) askServers(op string, args interface{}) (Err, string) {
 	return ErrNoLeader, ""
 }
 
-func (ck *Clerk) Get(key string) string {
-	resultCh := make(chan string)
-	ck.mu.Lock()
-	ck.taskQueue <- task{
-		index:    ck.taskIndex + 1,
-		op:       "Get",
-		key:      key,
-		resultCh: resultCh,
-		taskTag:  tag(ck.clientTag + int64(ck.taskIndex) + 1),
-	}
-	ck.taskIndex++
-	ck.mu.Unlock()
-	return <-resultCh
-}
-
-func (ck *Clerk) PutAppend(key string, value string, op string) {
+func (ck *Clerk) addTask(op string, key string, value string) chan string {
 	resultCh := make(chan string)
 	ck.mu.Lock()
 	ck.taskQueue <- task{
@@ -167,12 +151,19 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 		key:      key,
 		value:    value,
 		resultCh: resultCh,
-		taskTag:  tag(ck.clientTag + int64(ck.taskIndex) + 1),
+		taskTag:  ck.clientTag + tag(ck.taskIndex) + 1,
 	}
 	ck.taskIndex++
 	ck.mu.Unlock()
-	// 等待任务完成
-	<-resultCh
+	return resultCh
+}
+
+func (ck *Clerk) Get(key string) string {
+	return <-ck.addTask("Get", key, "")
+}
+
+func (ck *Clerk) PutAppend(key string, value string, op string) {
+	<-ck.addTask(op, key, value)
 }
 
 func (ck *Clerk) Put(key string, value string) {
