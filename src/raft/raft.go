@@ -176,6 +176,8 @@ func (rf *Raft) readPersist(data []byte) {
 		if len(SnapshotData) > 0 {
 			rf.snapshotData = SnapshotData
 			rf.snapshotLastIndex = rf.logs[0].CommandIndex
+			// 启动时就把Snapshot提交上去
+			rf.updateCommitIndex(rf.snapshotLastIndex)
 		}
 		DPrintf("s[%v] readPersist logsLen:[%v] Term:[%v] snapshotLastIndex:[%v]\n", rf.me, len(logs), rf.currentTerm, rf.snapshotLastIndex)
 	}
