@@ -8,7 +8,7 @@ import (
 )
 
 const (
-	Debug = true
+	Debug = false
 
 	OK             = "OK"
 	ErrNoKey       = "ErrNoKey"

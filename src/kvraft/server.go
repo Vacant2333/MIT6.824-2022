@@ -1,6 +1,7 @@
 package kvraft
 
 import (
+	"bytes"
 	"mit6.824/labgob"
 	"mit6.824/labrpc"
 	"mit6.824/raft"
@@ -16,19 +17,20 @@ type Op struct {
 }
 
 type KVServer struct {
-	mu           sync.Mutex
-	me           int
-	rf           *raft.Raft         // 该状态机对应的Raft
-	applyCh      chan raft.ApplyMsg // 从Raft发送过来的Log
-	dead         int32              // 同Raft的dead
-	maxRaftState int                // 当Raft的RaftStateSize接近该值时启动Snapshot
+	mu      sync.Mutex
+	me      int
+	rf      *raft.Raft         // 该状态机对应的Raft
+	applyCh chan raft.ApplyMsg // 从Raft发送过来的Log
+	dead    int32              // 同Raft的dead
 	// 3A
-	kv        map[string]string // K/V数据
-	doneTag   map[tag]bool
-	doneIndex map[int]tag
-	doneCond  map[int]*sync.Cond
+	kv        map[string]string  // (持久化)K/V数据
+	doneTag   map[tag]bool       // (持久化)用来给指令去重
+	doneIndex map[int]tag        // 已提交到状态机的Log(不包括Snapshot的内容)
+	doneCond  map[int]*sync.Cond // Client发送到该Server的任务,完成后通知Cond任务完成
 	// 3B
 	checkSnapshotCond sync.Cond
+	persister         *raft.Persister
+	maxRaftState      int // 当Raft的RaftStateSize接近该值时启动Snapshot
 }
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
@@ -144,7 +146,13 @@ func (kv *KVServer) applier() {
 // apply新Log时,检查是否需要Snapshot
 func (kv *KVServer) checkSnapshot() {
 	for kv.killed() == false {
-
+		if float64(kv.persister.RaftStateSize()) > float64(kv.maxRaftState)*serverSnapshotStatePercent {
+			// Raft状态的大小接近阈值,发送Snapshot
+			writer := new(bytes.Buffer)
+			encoder := labgob.NewEncoder(writer)
+			encoder.Encode(kv.kv)
+			encoder.Encode(kv.doneTag)
+		}
 	}
 }
 
@@ -162,14 +170,16 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	labgob.Register(Op{})
 	applyCh := make(chan raft.ApplyMsg)
 	kv := &KVServer{
-		me:           me,
-		rf:           raft.Make(servers, me, persister, applyCh),
-		applyCh:      applyCh,
-		maxRaftState: maxRaftState,
-		kv:           make(map[string]string),
-		doneTag:      make(map[tag]bool),
-		doneIndex:    make(map[int]tag),
-		doneCond:     make(map[int]*sync.Cond),
+		me:                me,
+		rf:                raft.Make(servers, me, persister, applyCh),
+		applyCh:           applyCh,
+		maxRaftState:      maxRaftState,
+		kv:                make(map[string]string),
+		doneTag:           make(map[tag]bool),
+		doneIndex:         make(map[int]tag),
+		doneCond:          make(map[int]*sync.Cond),
+		checkSnapshotCond: sync.Cond{L: &sync.Mutex{}},
+		persister:         persister,
 	}
 	if maxRaftState != -1 {
 		go kv.checkSnapshot()
