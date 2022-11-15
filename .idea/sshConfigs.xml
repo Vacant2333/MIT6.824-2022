@@ -3,6 +3,7 @@
   <component name="SshConfigs">
     <configs>
       <sshConfig authType="PASSWORD" connectionConfig="{&quot;serverAliveInterval&quot;:30}" host="34.96.134.99" id="faa02b75-8ba0-4324-94e4-8263080c43db" port="22" nameFormat="DESCRIPTIVE" username="root" useOpenSSHConfig="true" />
+      <sshConfig host="cloud.muddy.ca" id="e9e433d0-3ca1-4199-8412-a9875f51f517" keyPath="$USER_HOME$/Downloads/private-key" port="11451" nameFormat="DESCRIPTIVE" username="prushka" useOpenSSHConfig="true" />
     </configs>
   </component>
 </project>

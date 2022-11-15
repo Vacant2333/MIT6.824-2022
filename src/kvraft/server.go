@@ -122,10 +122,14 @@ func (kv *KVServer) startOp(op string, key string, value string, opTag tag) (boo
 // 持续接受来自Raft的Log
 func (kv *KVServer) applier() {
 	for kv.killed() == false {
+		// 接受一条被Apply的Log
 		msg := <-kv.applyCh
+		// 解析Log中的command
 		command, _ := msg.Command.(Op)
 		kv.mu.Lock()
+		// 检查任务是否已完成过(一个任务/Log可能会发送多次,因为前几次可能因为某种原因没有及时提交)
 		canSave := !kv.haveDoneTask(command.Tag, true)
+		// 保存已提交的Log的Tag
 		kv.doneIndex[msg.CommandIndex] = command.Tag
 		if command.Type == "Put" && canSave {
 			kv.kv[command.Key] = command.Value
@@ -140,19 +144,6 @@ func (kv *KVServer) applier() {
 			cond.Broadcast()
 		}
 		kv.mu.Unlock()
-	}
-}
-
-// apply新Log时,检查是否需要Snapshot
-func (kv *KVServer) checkSnapshot() {
-	for kv.killed() == false {
-		if float64(kv.persister.RaftStateSize()) > float64(kv.maxRaftState)*serverSnapshotStatePercent {
-			// Raft状态的大小接近阈值,发送Snapshot
-			writer := new(bytes.Buffer)
-			encoder := labgob.NewEncoder(writer)
-			encoder.Encode(kv.kv)
-			encoder.Encode(kv.doneTag)
-		}
 	}
 }
 
@@ -181,11 +172,31 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 		checkSnapshotCond: sync.Cond{L: &sync.Mutex{}},
 		persister:         persister,
 	}
+	// 如果是-1,则不需要进行快照
 	if maxRaftState != -1 {
 		go kv.checkSnapshot()
 	}
 	go kv.applier()
 	return kv
+}
+
+// 检查是否需要Snapshot来节省日志空间
+func (kv *KVServer) checkSnapshot() {
+	for kv.killed() == false {
+		kv.checkSnapshotCond.L.Lock()
+		// 等待被唤醒
+		kv.checkSnapshotCond.Wait()
+		kv.checkSnapshotCond.L.Unlock()
+		kv.mu.Lock()
+		if float64(kv.persister.RaftStateSize()) >= float64(kv.maxRaftState)*serverSnapshotStatePercent {
+			// Raft状态的大小接近阈值,发送Snapshot
+			writer := new(bytes.Buffer)
+			encoder := labgob.NewEncoder(writer)
+			encoder.Encode(kv.kv)
+			encoder.Encode(kv.doneTag)
+		}
+		kv.mu.Unlock()
+	}
 }
 
 func (kv *KVServer) Kill() {
