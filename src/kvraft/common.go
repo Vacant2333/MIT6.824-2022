@@ -8,7 +8,7 @@ import (
 )
 
 const (
-	Debug = false
+	Debug = true
 
 	OK             = "OK"
 	ErrNoKey       = "ErrNoKey"
@@ -18,19 +18,21 @@ const (
 	clientDoTaskTimeOut     = 250 * time.Millisecond
 	clientNoLeaderSleepTime = 50 * time.Millisecond
 
-	serverSnapshotStatePercent = 0.95 // 当Raft的ReadStateSize大于该值*maxRaftState时启动Snapshot
+	serverSnapshotStatePercent = 0.85 // 当Raft的ReadStateSize大于该值*maxRaftState时启动Snapshot
 )
 
 type Err string
 
-// 每个Task的唯一ID
-type tag int64
+// ClientTag 每个Client的唯一Tag
+type ClientTag int64
+type ClientTaskIndex int64
 
 type PutAppendArgs struct {
-	Key   string
-	Value string
-	Op    string // Put/Append
-	Tag   tag
+	Key       string
+	Value     string
+	Op        string // Put/Append
+	ClientTag ClientTag
+	TaskIndex ClientTaskIndex
 }
 
 type PutAppendReply struct {
@@ -38,8 +40,9 @@ type PutAppendReply struct {
 }
 
 type GetArgs struct {
-	Key string
-	Tag tag
+	Key       string
+	ClientTag ClientTag
+	TaskIndex ClientTaskIndex
 }
 
 type GetReply struct {
@@ -54,9 +57,8 @@ func DPrintf(format string, a ...interface{}) {
 }
 
 // 获得一个int64的随机数(Client的Tag)
-func nRand() tag {
+func nRand() ClientTag {
 	max := big.NewInt(int64(1) << 62)
-	bigx, _ := rand.Int(rand.Reader, max)
-	x := bigx.Int64()
-	return tag(x)
+	bigX, _ := rand.Int(rand.Reader, max)
+	return ClientTag(bigX.Int64())
 }

@@ -7,21 +7,20 @@ import (
 )
 
 type task struct {
-	index    int         // 对于当前Client的任务的Index
-	op       string      // 任务类型
-	key      string      // Get/PutAppend参数
-	value    string      // PutAppend参数
-	taskTag  tag         // 任务的唯一ID
-	resultCh chan string // 传Get的返回值和卡住Get/PutAppend方法
+	index    ClientTaskIndex // 对于当前Client的任务的Index
+	op       string          // 任务类型
+	key      string          // Get/PutAppend参数
+	value    string          // PutAppend参数
+	resultCh chan string     // 传Get的返回值和卡住Get/PutAppend方法
 }
 
 type Clerk struct {
 	servers     []*labrpc.ClientEnd
 	mu          sync.Mutex
-	taskQueue   chan task // 任务队列
-	taskIndex   int       // 最后一条任务的下标
-	clientTag   tag       // Client的唯一标识
-	leaderIndex int       // 上一次成功完成任务的Leader的Index,没有的话为-1
+	taskQueue   chan task       // 任务队列
+	clientTag   ClientTag       // Client的唯一标识
+	taskIndex   ClientTaskIndex // 最后一条任务的下标(包括未完成的任务)
+	leaderIndex int             // 上一次成功完成任务的Leader的Index,没有的话为-1
 }
 
 func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
@@ -39,29 +38,31 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 func (ck *Clerk) doTasks() {
 	for {
 		currentTask := <-ck.taskQueue
-		DPrintf("C[%v] start a task:[%v]\n", ck.clientTag, currentTask)
+		//DPrintf("C[%v] start a task:[%v]\n", ck.clientTag, currentTask)
 		var args interface{}
 		// 根据任务类型设置args
 		if currentTask.op == "Get" {
 			// Get task
 			args = &GetArgs{
-				Key: currentTask.key,
-				Tag: currentTask.taskTag,
+				Key:       currentTask.key,
+				TaskIndex: currentTask.index,
+				ClientTag: ck.clientTag,
 			}
 		} else {
 			// Put/Append task
 			args = &PutAppendArgs{
-				Key:   currentTask.key,
-				Value: currentTask.value,
-				Op:    currentTask.op,
-				Tag:   currentTask.taskTag,
+				Key:       currentTask.key,
+				Value:     currentTask.value,
+				Op:        currentTask.op,
+				TaskIndex: currentTask.index,
+				ClientTag: ck.clientTag,
 			}
 		}
 		for {
 			err, value := ck.askServers(currentTask.op, args)
 			if err != ErrNoLeader {
 				// 任务完成,Err不一定是OK,也可能是ErrNoKey
-				DPrintf("C[%v] success a task:[%v]\n", ck.clientTag, currentTask)
+				//DPrintf("C[%v] success a task:[%v]\n", ck.clientTag, currentTask)
 				// 如果是Get会传回value,如果是Put/Append会传回"",让Append请求完成
 				currentTask.resultCh <- value
 				break
@@ -79,7 +80,7 @@ func (ck *Clerk) askServers(op string, args interface{}) (Err, string) {
 	serverCh := make(chan int, len(ck.servers))
 	// 初始化reply
 	replies := make([]interface{}, len(ck.servers))
-	for index, _ := range replies {
+	for index := range replies {
 		if op == "Get" {
 			replies[index] = &GetReply{}
 		} else {
@@ -151,7 +152,6 @@ func (ck *Clerk) addTask(op string, key string, value string) chan string {
 		key:      key,
 		value:    value,
 		resultCh: resultCh,
-		taskTag:  ck.clientTag + tag(ck.taskIndex) + 1,
 	}
 	ck.taskIndex++
 	ck.mu.Unlock()
