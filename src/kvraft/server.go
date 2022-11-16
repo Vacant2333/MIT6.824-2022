@@ -47,8 +47,8 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 		// 不是Leader
 		reply.Err = ErrWrongLeader
 	} else {
-		kv.mu.Unlock()
 		cond := kv.doneCond[index]
+		kv.mu.Unlock()
 		cond.L.Lock()
 		// 等待任务完成,推送至cond唤醒
 		cond.Wait()
@@ -81,8 +81,8 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		// 不是Leader
 		reply.Err = ErrWrongLeader
 	} else {
-		kv.mu.Unlock()
 		cond := kv.doneCond[index]
+		kv.mu.Unlock()
 		cond.L.Lock()
 		// 等待任务完成,推送至cond唤醒
 		cond.Wait()

@@ -38,7 +38,7 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 func (ck *Clerk) doTasks() {
 	for {
 		currentTask := <-ck.taskQueue
-		//DPrintf("C[%v] start a task:[%v]\n", ck.clientTag, currentTask)
+		DPrintf("C[%v] start a task:[%v]\n", ck.clientTag, currentTask)
 		var args interface{}
 		// 根据任务类型设置args
 		if currentTask.op == "Get" {
@@ -59,10 +59,9 @@ func (ck *Clerk) doTasks() {
 			}
 		}
 		for {
-			err, value := ck.askServers(currentTask.op, args)
-			if err != ErrNoLeader {
+			if err, value := ck.startTask(currentTask.op, args); err != ErrNoLeader {
 				// 任务完成,Err不一定是OK,也可能是ErrNoKey
-				//DPrintf("C[%v] success a task:[%v]\n", ck.clientTag, currentTask)
+				DPrintf("C[%v] success a task:[%v]\n", ck.clientTag, currentTask)
 				// 如果是Get会传回value,如果是Put/Append会传回"",让Append请求完成
 				currentTask.resultCh <- value
 				break
@@ -73,7 +72,7 @@ func (ck *Clerk) doTasks() {
 }
 
 // 并行的向所有Servers发送某个Task
-func (ck *Clerk) askServers(op string, args interface{}) (Err, string) {
+func (ck *Clerk) startTask(op string, args interface{}) (Err, string) {
 	// 所有的reply发送到该ch
 	replyCh := make(chan interface{}, len(ck.servers))
 	// 当前reply的server

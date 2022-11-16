@@ -18,7 +18,7 @@ const (
 	clientDoTaskTimeOut     = 250 * time.Millisecond
 	clientNoLeaderSleepTime = 50 * time.Millisecond
 
-	serverSnapshotStatePercent = 0.85 // 当Raft的ReadStateSize大于该值*maxRaftState时启动Snapshot
+	serverSnapshotStatePercent = 0.9 // 当Raft的ReadStateSize大于该值*maxRaftState时启动Snapshot
 )
 
 type Err string
