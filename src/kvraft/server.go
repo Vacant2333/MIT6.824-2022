@@ -170,7 +170,7 @@ func (kv *KVServer) applier() {
 				// Raft状态的大小接近阈值,要求Raft进行Snapshot
 				kv.saveSnapshot()
 			}
-		} else {
+		} else if msg.SnapshotIndex > kv.lastAppliedIndex {
 			// 这条Log是Snapshot
 			kv.readSnapshot(msg.Snapshot, msg.SnapshotIndex)
 		}
@@ -209,10 +209,11 @@ func (kv *KVServer) saveSnapshot() {
 	// todo:clean
 	writer := new(bytes.Buffer)
 	encoder := labgob.NewEncoder(writer)
-	encoder.Encode(kv.kv)
-	encoder.Encode(kv.clientLastTaskIndex)
-	kv.rf.Snapshot(kv.lastAppliedIndex, writer.Bytes())
-	DPrintf("S[%v] save snapshot(%v, %v)\n", kv.me, kv.lastAppliedIndex, len(writer.Bytes()))
+	if encoder.Encode(kv.kv) == nil &&
+		encoder.Encode(kv.clientLastTaskIndex) == nil {
+		kv.rf.Snapshot(kv.lastAppliedIndex, writer.Bytes())
+		DPrintf("S[%v] save snapshot(%v, %v)\n", kv.me, kv.lastAppliedIndex, len(writer.Bytes()))
+	}
 }
 
 // 读取Snapshot
@@ -221,10 +222,15 @@ func (kv *KVServer) readSnapshot(data []byte, last int) {
 		return
 	}
 	decoder := labgob.NewDecoder(bytes.NewBuffer(data))
-	decoder.Decode(&kv.kv)
-	decoder.Decode(&kv.clientLastTaskIndex)
-	kv.lastAppliedIndex = last
-	DPrintf("S[%v] read snapshot(%v, %v)\n", kv.me, kv.lastAppliedIndex, len(data))
+	var kvMap map[string]string
+	var clientLastTaskIndex map[ClientTag]ClientTaskIndex
+	if decoder.Decode(&kvMap) != nil &&
+		decoder.Decode(&clientLastTaskIndex) != nil {
+		kv.kv = kvMap
+		kv.clientLastTaskIndex = clientLastTaskIndex
+		kv.lastAppliedIndex = last
+		DPrintf("S[%v] read snapshot(%v, %v)\n", kv.me, kv.lastAppliedIndex, len(data))
+	}
 }
 
 func (kv *KVServer) Kill() {

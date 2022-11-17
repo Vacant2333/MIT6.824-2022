@@ -151,10 +151,11 @@ func (rf *Raft) GetState() (int, bool) {
 func (rf *Raft) persist() {
 	writer := new(bytes.Buffer)
 	encoder := labgob.NewEncoder(writer)
-	encoder.Encode(rf.votedFor)
-	encoder.Encode(rf.currentTerm)
-	encoder.Encode(rf.logs)
-	rf.persister.SaveStateAndSnapshot(writer.Bytes(), rf.snapshotData)
+	if encoder.Encode(rf.votedFor) == nil &&
+		encoder.Encode(rf.currentTerm) == nil &&
+		encoder.Encode(rf.logs) == nil {
+		rf.persister.SaveStateAndSnapshot(writer.Bytes(), rf.snapshotData)
+	}
 }
 
 // 读取状态,Lock的时候使用
