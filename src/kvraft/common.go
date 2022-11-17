@@ -25,6 +25,8 @@ type Err string
 
 // ClientTag 每个Client的唯一Tag
 type ClientTag int64
+
+// ClientTaskIndex 每个Task的Index
 type ClientTaskIndex int64
 
 type PutAppendArgs struct {

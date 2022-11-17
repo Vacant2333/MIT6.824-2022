@@ -2,6 +2,7 @@ package raft
 
 import (
 	"bytes"
+	"fmt"
 	"mit6.824/labgob"
 	"mit6.824/labrpc"
 	"sort"
@@ -198,6 +199,7 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	rf.mu.Lock()
 	if index > rf.snapshotLastIndex {
+		fmt.Printf("raft[%v] try Snapshot[%v] snapshotLastIndex[%v] len[%v]\n", rf.me, index, rf.snapshotLastIndex, rf.getLogsLen())
 		// 丢弃Index之前的所有Log
 		if rf.snapshotLastIndex == 0 {
 			rf.logs = rf.logs[index-1:]

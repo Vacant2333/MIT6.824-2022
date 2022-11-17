@@ -26,14 +26,12 @@ type KVServer struct {
 	// 3A
 	kv                  map[string]string             // (持久化)Key/Value数据库
 	clientLastTaskIndex map[ClientTag]ClientTaskIndex // (持久化)每个客户端已完成的最后一个任务的下标
-	//doneIndex           map[int]ClientTag  // 用来检查完成的任务是否是自己发出的任务,任务Index:任务Tag
-	doneTask map[int]*Op
-	doneCond map[int]*sync.Cond // Client发送到该Server的任务,任务完成后通知Cond回复Client
+	doneTask            map[int]*Op                   // 已完成的任务(用于校验完成的Index对应的任务是不是自己发布的任务)
+	doneCond            map[int]*sync.Cond            // Client发送到该Server的任务,任务完成后通知Cond回复Client
 	// 3B
-	checkSnapshotCond sync.Cond // checkSnapshot协程的Cond
-	persister         *raft.Persister
-	maxRaftState      int // 当Raft的RaftStateSize接近该值时进行Snapshot
-	lastAppliedIndex  int // 接收到的最后一条已提交的Log
+	persister        *raft.Persister
+	maxRaftState     int // 当Raft的RaftStateSize接近该值时进行Snapshot
+	lastAppliedIndex int // (持久化)接收到的最后一条已提交的Log
 }
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
@@ -128,37 +126,54 @@ func (kv *KVServer) startOp(op string, key string, value string, clientTag Clien
 // 持续接受来自Raft的Log
 func (kv *KVServer) applier() {
 	for kv.killed() == false {
+		// todo:no snapshot msg
 		// 接受一条被Apply的Log
 		msg := <-kv.applyCh
-		// 解析Log中的command
-		command, _ := msg.Command.(Op)
 		kv.mu.Lock()
-		// 检查任务是否已完成过(一个任务/Log可能会发送多次,因为前几次可能因为某种原因没有及时提交)
-		// 最后一条已完成的任务的Index必须小于当前任务才算没有完成过,因为线性一致性
-		if kv.getClientLastIndex(command.ClientTag) < command.ClientIndex {
-			// 如果是第一次完成该任务/Log,才保存到KV中
-			if command.Type == "Put" {
-				kv.kv[command.Key] = command.Value
-			} else if command.Type == "Append" {
-				if _, ok := kv.kv[command.Key]; ok {
-					kv.kv[command.Key] += command.Value
-				} else {
-					kv.kv[command.Key] = command.Value
-				}
-			}
-			// 该任务的Index比之前存的任务Index大,更新
-			kv.clientLastTaskIndex[command.ClientTag] = command.ClientIndex
-		}
-		if cond, ok := kv.doneCond[msg.CommandIndex]; ok {
-			// 这个任务被给到过自己,保存Op,用于校验是否是自己Start的Op
-			kv.doneTask[msg.CommandIndex] = &command
-			// 通知所有在等待该任务的goroutine
-			cond.Broadcast()
-		}
 		// 更新最后Apply的Log的Index
 		kv.lastAppliedIndex = msg.CommandIndex
-		// 检查是否需要Snapshot
-		kv.checkSnapshotCond.Signal()
+		if !msg.SnapshotValid {
+			// 如果不是Snapshot解析Log中的command
+			command, _ := msg.Command.(Op)
+			// 检查任务是否已完成过(一个任务/Log可能会发送多次,因为前几次可能因为某种原因没有及时提交)
+			// 最后一条已完成的任务的Index必须小于当前任务才算没有完成过,因为线性一致性
+			if command.Type != "Get" && kv.getClientLastIndex(command.ClientTag) < command.ClientIndex {
+				// 如果是第一次完成该任务/Log,才保存到KV中
+				if command.Type == "Put" {
+					// Put
+					kv.kv[command.Key] = command.Value
+				} else {
+					// Append
+					if _, ok := kv.kv[command.Key]; ok {
+						kv.kv[command.Key] += command.Value
+					} else {
+						kv.kv[command.Key] = command.Value
+					}
+					DPrintf("S[%v] append[%v]\n", kv.me, command.Value)
+				}
+				// 该任务的Index比之前存的任务Index大,更新
+				kv.clientLastTaskIndex[command.ClientTag] = command.ClientIndex
+			} else if command.Type != "Get" {
+				DPrintf("S[%v] didnt apply [%v]", kv.me, command.Value)
+			}
+			if cond, ok := kv.doneCond[msg.CommandIndex]; ok {
+				// 这个任务被给到过自己,保存Op,用于校验是否是自己Start的Op
+				kv.doneTask[msg.CommandIndex] = &command
+				// 通知所有在等待该任务的goroutine
+				cond.Broadcast()
+				if command.Type == "Get" {
+					DPrintf("s[%v] get[%v]\n", kv.me, command.Key)
+				}
+			}
+			// 检查是否需要Snapshot
+			if kv.maxRaftState != -1 && float64(kv.persister.RaftStateSize()) >= float64(kv.maxRaftState)*serverSnapshotStatePercent {
+				// Raft状态的大小接近阈值,要求Raft进行Snapshot
+				kv.saveSnapshot()
+			}
+		} else {
+			// 这条Log是Snapshot
+			kv.readSnapshot(msg.Snapshot)
+		}
 		kv.mu.Unlock()
 	}
 }
@@ -183,37 +198,34 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 		clientLastTaskIndex: make(map[ClientTag]ClientTaskIndex),
 		doneTask:            map[int]*Op{},
 		doneCond:            make(map[int]*sync.Cond),
-		checkSnapshotCond:   sync.Cond{L: &sync.Mutex{}},
 		persister:           persister,
-	}
-	// 如果是-1,则不需要进行快照
-	if maxRaftState != -1 {
-		go kv.checkSnapshot()
 	}
 	go kv.applier()
 	return kv
 }
 
-// 检查是否需要Snapshot来节省日志空间
-func (kv *KVServer) checkSnapshot() {
-	for kv.killed() == false {
-		kv.checkSnapshotCond.L.Lock()
-		// 等待被唤醒
-		kv.checkSnapshotCond.Wait()
-		kv.checkSnapshotCond.L.Unlock()
-		kv.mu.Lock()
-		if float64(kv.persister.RaftStateSize()) >= float64(kv.maxRaftState)*serverSnapshotStatePercent {
-			// Raft状态的大小接近阈值,发送Snapshot
-			writer := new(bytes.Buffer)
-			encoder := labgob.NewEncoder(writer)
-			encoder.Encode(kv.kv)
-			encoder.Encode(kv.clientLastTaskIndex)
-			kv.rf.Snapshot(kv.lastAppliedIndex, writer.Bytes())
-			DPrintf("S[%v] snapshot(%v, %v)\n", kv.me, kv.lastAppliedIndex, len(writer.Bytes()))
-			// todo:clean
-		}
-		kv.mu.Unlock()
+// 保存Snapshot
+func (kv *KVServer) saveSnapshot() {
+	// todo:clean
+	writer := new(bytes.Buffer)
+	encoder := labgob.NewEncoder(writer)
+	encoder.Encode(kv.kv)
+	encoder.Encode(kv.clientLastTaskIndex)
+	encoder.Encode(kv.lastAppliedIndex)
+	kv.rf.Snapshot(kv.lastAppliedIndex, writer.Bytes())
+	DPrintf("S[%v] save snapshot(%v, %v)\n", kv.me, kv.lastAppliedIndex, len(writer.Bytes()))
+}
+
+// 读取Snapshot
+func (kv *KVServer) readSnapshot(data []byte) {
+	if data == nil || len(data) < 1 {
+		return
 	}
+	decoder := labgob.NewDecoder(bytes.NewBuffer(data))
+	decoder.Decode(&kv.kv)
+	decoder.Decode(&kv.clientLastTaskIndex)
+	decoder.Decode(&kv.lastAppliedIndex)
+	DPrintf("S[%v] read snapshot(%v, %v)\n", kv.me, kv.lastAppliedIndex, len(data))
 }
 
 func (kv *KVServer) Kill() {
