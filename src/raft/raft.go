@@ -2,7 +2,6 @@ package raft
 
 import (
 	"bytes"
-	"fmt"
 	"mit6.824/labgob"
 	"mit6.824/labrpc"
 	"sort"
@@ -199,12 +198,14 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	rf.mu.Lock()
 	if index > rf.snapshotLastIndex {
-		fmt.Printf("raft[%v] try Snapshot[%v] snapshotLastIndex[%v] len[%v]\n", rf.me, index, rf.snapshotLastIndex, rf.getLogsLen())
-		// 丢弃Index之前的所有Log
-		if rf.snapshotLastIndex == 0 {
-			rf.logs = rf.logs[index-1:]
-		} else {
-			rf.logs = rf.logs[index-rf.snapshotLastIndex:]
+		if index <= rf.getLogsLen() {
+			// 丢弃Index之前的所有Log
+			// 3B中可能会出现index>logsLen的情况,因为Follower的Logs被Leader的Snapshot覆盖了,但是Follower已经给上层推送了该Snapshot之后的数据
+			if rf.snapshotLastIndex == 0 {
+				rf.logs = rf.logs[index-1:]
+			} else {
+				rf.logs = rf.logs[index-rf.snapshotLastIndex:]
+			}
 		}
 		rf.snapshotData = snapshot
 		rf.snapshotLastIndex = index
@@ -699,7 +700,7 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 		// 如果接收到的RPC请求或响应中,任期号T>currentTerm,那么就令currentTerm等于T,并且切换状态为Follower
 		rf.increaseTerm(args.LeaderTerm)
 	} else if args.LeaderTerm < rf.currentTerm || rf.role == leader {
-		// 不正常的包,Leader的Term不大于Follower的Term
+		// 不正常的包,Leader的Term小于Follower的Term
 		reply.Success = false
 		return
 	}

@@ -172,7 +172,7 @@ func (kv *KVServer) applier() {
 			}
 		} else {
 			// 这条Log是Snapshot
-			kv.readSnapshot(msg.Snapshot)
+			kv.readSnapshot(msg.Snapshot, msg.SnapshotIndex)
 		}
 		kv.mu.Unlock()
 	}
@@ -211,20 +211,19 @@ func (kv *KVServer) saveSnapshot() {
 	encoder := labgob.NewEncoder(writer)
 	encoder.Encode(kv.kv)
 	encoder.Encode(kv.clientLastTaskIndex)
-	encoder.Encode(kv.lastAppliedIndex)
 	kv.rf.Snapshot(kv.lastAppliedIndex, writer.Bytes())
 	DPrintf("S[%v] save snapshot(%v, %v)\n", kv.me, kv.lastAppliedIndex, len(writer.Bytes()))
 }
 
 // 读取Snapshot
-func (kv *KVServer) readSnapshot(data []byte) {
+func (kv *KVServer) readSnapshot(data []byte, last int) {
 	if data == nil || len(data) < 1 {
 		return
 	}
 	decoder := labgob.NewDecoder(bytes.NewBuffer(data))
 	decoder.Decode(&kv.kv)
 	decoder.Decode(&kv.clientLastTaskIndex)
-	decoder.Decode(&kv.lastAppliedIndex)
+	kv.lastAppliedIndex = last
 	DPrintf("S[%v] read snapshot(%v, %v)\n", kv.me, kv.lastAppliedIndex, len(data))
 }
 
