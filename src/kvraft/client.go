@@ -16,7 +16,7 @@ type task struct {
 
 type Clerk struct {
 	servers     []*labrpc.ClientEnd
-	mu          sync.Mutex
+	taskMu      sync.Mutex
 	taskQueue   chan task       // 任务队列
 	clientTag   ClientTag       // Client的唯一标识
 	taskIndex   ClientTaskIndex // 最后一条任务的下标(包括未完成的任务)
@@ -117,7 +117,7 @@ func (ck *Clerk) startTask(op string, args interface{}) (Err, string) {
 			// 拿到了reply
 		case <-timeOut:
 			// 任务超时
-			DPrintf("C[%v] task[%v] timeout\n", ck.clientTag, args)
+			DPrintf("C[%v] task[%v] timeout,leaderIndex[%v]\n", ck.clientTag, args, ck.leaderIndex)
 			ck.leaderIndex = -1
 			return ErrNoLeader, ""
 		}
@@ -147,7 +147,7 @@ func (ck *Clerk) startTask(op string, args interface{}) (Err, string) {
 // 添加任务,返回任务结果的chan
 func (ck *Clerk) addTask(op string, key string, value string) chan string {
 	resultCh := make(chan string)
-	ck.mu.Lock()
+	ck.taskMu.Lock()
 	ck.taskQueue <- task{
 		index:    ck.taskIndex + 1,
 		op:       op,
@@ -156,7 +156,7 @@ func (ck *Clerk) addTask(op string, key string, value string) chan string {
 		resultCh: resultCh,
 	}
 	ck.taskIndex++
-	ck.mu.Unlock()
+	ck.taskMu.Unlock()
 	return resultCh
 }
 

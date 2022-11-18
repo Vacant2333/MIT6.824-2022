@@ -8,7 +8,7 @@ import (
 )
 
 const (
-	Debug = false
+	Debug = true
 
 	OK             = "OK"
 	ErrNoKey       = "ErrNoKey"
@@ -18,7 +18,7 @@ const (
 	clientDoTaskTimeOut     = 500 * time.Millisecond
 	clientNoLeaderSleepTime = 50 * time.Millisecond
 
-	serverSnapshotStatePercent = 0.8 // 当Raft的ReadStateSize大于该值*maxRaftState时启动Snapshot
+	serverSnapshotStatePercent = 0.75 // 当Raft的ReadStateSize大于该值*maxRaftState时启动Snapshot
 )
 
 type Err string

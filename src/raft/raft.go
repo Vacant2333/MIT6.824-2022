@@ -240,7 +240,7 @@ func (rf *Raft) sendInstallSnapshot(server int) bool {
 	return ok
 }
 
-// InstallSnapshot follower,接收Leader发来的Snapshot
+// InstallSnapshot Follower接收Leader发来的Snapshot要求
 func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapshotReply) {
 	rf.mu.Lock()
 	if args.LeaderTerm > rf.currentTerm {

@@ -26,8 +26,9 @@ type KVServer struct {
 	// 3A
 	kv                  map[string]string             // (持久化)Key/Value数据库
 	clientLastTaskIndex map[ClientTag]ClientTaskIndex // (持久化)每个客户端已完成的最后一个任务的下标
-	doneTask            map[int]int                   // 已完成的任务(用于校验完成的Index对应的任务是不是自己发布的任务)
-	doneCond            map[int]*sync.Cond            // Client发送到该Server的任务,任务完成后通知Cond回复Client
+	// todo: doneTask->term
+	doneTask map[int]int        // 已完成的任务(用于校验完成的Index对应的任务是不是自己发布的任务)
+	doneCond map[int]*sync.Cond // Client发送到该Server的任务,任务完成后通知Cond回复Client
 	// 3B
 	persister        *raft.Persister
 	maxRaftState     int // 当Raft的RaftStateSize接近该值时进行Snapshot
@@ -128,9 +129,9 @@ func (kv *KVServer) applier() {
 		// 接受一条被Apply的Log
 		msg := <-kv.applyCh
 		kv.mu.Lock()
-		// 更新最后Apply的Log的Index
-		kv.lastAppliedIndex = msg.CommandIndex
 		if !msg.SnapshotValid {
+			// 更新最后Apply的Log的Index
+			kv.lastAppliedIndex = msg.CommandIndex
 			// 如果不是Snapshot解析Log中的command
 			command, _ := msg.Command.(Op)
 			// 检查任务是否已完成过(一个任务/Log可能会发送多次,因为前几次可能因为某种原因没有及时提交)
@@ -170,6 +171,7 @@ func (kv *KVServer) applier() {
 			}
 		} else {
 			// 这条Log是Snapshot
+			DPrintf("S[%v] get a snapshot msg[%v]\n", kv.me, msg)
 			kv.readSnapshot(msg.Snapshot, msg.SnapshotIndex)
 		}
 		kv.mu.Unlock()
@@ -204,7 +206,6 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 
 // 保存Snapshot
 func (kv *KVServer) saveSnapshot() {
-	// todo:clean
 	writer := new(bytes.Buffer)
 	encoder := labgob.NewEncoder(writer)
 	if encoder.Encode(kv.kv) == nil &&
@@ -220,6 +221,7 @@ func (kv *KVServer) readSnapshot(data []byte, lastIndex int) {
 	if lastIndex <= kv.lastAppliedIndex || data == nil || len(data) < 1 {
 		return
 	}
+	DPrintf("S[%v] start read snapshot last[%v] applied[%v]\n", kv.me, lastIndex, kv.lastAppliedIndex)
 	decoder := labgob.NewDecoder(bytes.NewBuffer(data))
 	var kvMap map[string]string
 	var clientLastTaskIndex map[ClientTag]ClientTaskIndex
@@ -229,11 +231,13 @@ func (kv *KVServer) readSnapshot(data []byte, lastIndex int) {
 		kv.clientLastTaskIndex = clientLastTaskIndex
 		kv.lastAppliedIndex = lastIndex
 		DPrintf("S[%v] read snapshot(%v, %v)\n", kv.me, kv.lastAppliedIndex, len(data))
+		DPrintf("S[%v] end read snapshot last[%v] applied[%v]\n", kv.me, lastIndex, kv.lastAppliedIndex)
 	}
 }
 
 // 清理KVServer
 func (kv *KVServer) clean() {
+	// todo:clean check
 	for i := range kv.doneTask {
 		if i <= kv.lastAppliedIndex {
 			delete(kv.doneTask, i)
@@ -248,6 +252,7 @@ func (kv *KVServer) clean() {
 
 func (kv *KVServer) Kill() {
 	atomic.StoreInt32(&kv.dead, 1)
+	DPrintf("S[%v] killed\n", kv.me)
 	kv.rf.Kill()
 }
 
