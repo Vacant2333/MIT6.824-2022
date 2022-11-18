@@ -73,11 +73,11 @@ func (ck *Clerk) doTasks() {
 
 // 并行的向所有Servers发送某个Task
 func (ck *Clerk) startTask(op string, args interface{}) (Err, string) {
-	// 所有的reply发送到该ch
+	// 所有的Reply发送到该Ch
 	replyCh := make(chan interface{}, len(ck.servers))
-	// 当前reply的server
+	// 当前Reply的Server
 	serverCh := make(chan int, len(ck.servers))
-	// 初始化reply
+	// 初始化Reply
 	replies := make([]interface{}, len(ck.servers))
 	for index := range replies {
 		if op == "Get" {
@@ -109,15 +109,17 @@ func (ck *Clerk) startTask(op string, args interface{}) (Err, string) {
 		}
 	}
 	// 持续检查replyCh,如果有可用的reply则直接返回
-	for ; replyCount > 0; replyCount++ {
+	timeOut := time.After(clientDoTaskTimeOut)
+	for ; replyCount > 0; replyCount-- {
 		var reply interface{}
 		select {
 		case reply = <-replyCh:
 			// 拿到了reply
-		case <-time.After(clientDoTaskTimeOut):
+		case <-timeOut:
 			// 任务超时
 			DPrintf("C[%v] task[%v] timeout\n", ck.clientTag, args)
-			break
+			ck.leaderIndex = -1
+			return ErrNoLeader, ""
 		}
 		server := <-serverCh
 		// 如果Reply不为空则返回对应的数据给ch

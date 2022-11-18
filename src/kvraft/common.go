@@ -15,8 +15,8 @@ const (
 	ErrWrongLeader = "ErrWrongLeader"
 	ErrNoLeader    = "ErrNoLeader"
 
-	clientDoTaskTimeOut     = 300 * time.Millisecond
-	clientNoLeaderSleepTime = 40 * time.Millisecond
+	clientDoTaskTimeOut     = 500 * time.Millisecond
+	clientNoLeaderSleepTime = 50 * time.Millisecond
 
 	serverSnapshotStatePercent = 0.8 // 当Raft的ReadStateSize大于该值*maxRaftState时启动Snapshot
 )

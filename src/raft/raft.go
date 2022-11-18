@@ -352,8 +352,8 @@ func (rf *Raft) ticker() {
 	}
 }
 
-// cond唤醒器,防止状态改变时唤醒cond失败(可能不在wait中)
-func (rf *Raft) wakeCond() {
+// Cond唤醒器,防止状态改变时唤醒Cond失败(可能不在Wait中)
+func (rf *Raft) condWaker() {
 	for rf.killed() == false {
 		// 防止cond没有收到状态改变时的Signal,仅出现于极个别情况
 		rf.checkCommitCond.Signal()
@@ -776,7 +776,7 @@ func Make(peers []*labrpc.ClientEnd, me int, persister *Persister, applyCh chan 
 		checkCommitCond:  sync.Cond{L: &sync.Mutex{}},
 	}
 	rf.readPersist(persister.ReadRaftState())
-	go rf.wakeCond()
+	go rf.condWaker()
 	go rf.checkCommittedLogs()
 	go rf.ticker()
 	go rf.applier()
