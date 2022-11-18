@@ -11,7 +11,7 @@ type task struct {
 	op       string          // 任务类型
 	key      string          // Get/PutAppend参数
 	value    string          // PutAppend参数
-	resultCh chan string     // 传Get的返回值和卡住Get/PutAppend方法
+	resultCh chan string     // 传Get的返回值和Block住Get/PutAppend方法
 }
 
 type Clerk struct {
@@ -96,9 +96,12 @@ func (ck *Clerk) startTask(op string, args interface{}) (Err, string) {
 		replyCh <- replies[server]
 		serverCh <- server
 	}
+	// 会收到的Reply的数量
+	replyCount := len(ck.servers)
 	if ck.leaderIndex != -1 {
 		// 优先发给上一次保存的Leader
 		go askServer(ck.leaderIndex)
+		replyCount = 1
 	} else {
 		// 没有保存leaderIndex,从所有服务器拿结果
 		for server := 0; server < len(ck.servers); server++ {
@@ -106,7 +109,7 @@ func (ck *Clerk) startTask(op string, args interface{}) (Err, string) {
 		}
 	}
 	// 持续检查replyCh,如果有可用的reply则直接返回
-	for count := 0; count < len(ck.servers); count++ {
+	for ; replyCount > 0; replyCount++ {
 		var reply interface{}
 		select {
 		case reply = <-replyCh:
@@ -116,25 +119,22 @@ func (ck *Clerk) startTask(op string, args interface{}) (Err, string) {
 			DPrintf("C[%v] task[%v] timeout\n", ck.clientTag, args)
 			break
 		}
+		server := <-serverCh
+		// 如果Reply不为空则返回对应的数据给ch
 		if op == "Get" && reply != nil {
+			// Get
 			getReply := reply.(*GetReply)
-			server := <-serverCh
 			if getReply.Err == OK || getReply.Err == ErrNoKey {
 				ck.leaderIndex = server
 				return getReply.Err, getReply.Value
 			}
 		} else if reply != nil {
-			// Put/Append task
+			// Put/Append
 			putAppendReply := reply.(*PutAppendReply)
-			server := <-serverCh
 			if putAppendReply.Err == OK {
 				ck.leaderIndex = server
 				return putAppendReply.Err, ""
 			}
-		}
-		if ck.leaderIndex != -1 {
-			// 如果存了leaderIndex,只获取一次reply
-			break
 		}
 	}
 	// 没有可用的Leader或是保存的leaderIndex失效
@@ -142,6 +142,7 @@ func (ck *Clerk) startTask(op string, args interface{}) (Err, string) {
 	return ErrNoLeader, ""
 }
 
+// 添加任务,返回任务结果的chan
 func (ck *Clerk) addTask(op string, key string, value string) chan string {
 	resultCh := make(chan string)
 	ck.mu.Lock()
