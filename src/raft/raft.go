@@ -131,7 +131,7 @@ func (rf *Raft) getLog(index int) *ApplyMsg {
 
 // 更新任期并转为Follower,Lock的时候使用,新的任期必须大于当前任期,Lock使用
 func (rf *Raft) increaseTerm(term int) {
-	// VotedFor和lastNewEntry是针对当前任期的值,如果任期改变就需要清空
+	// VotedFor和lastNewEntry是针对当前任期的值,任期改变就需要清空
 	rf.lastNewEntryIndex = 0
 	rf.votedFor = -1
 	rf.role = follower
@@ -192,6 +192,7 @@ func (rf *Raft) updateCommitIndex(commitIndex int) {
 	rf.applierCond.Signal()
 }
 
+// CondInstallSnapshot 是否能安装快照
 func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int, snapshot []byte) bool {
 	return true
 }
@@ -201,7 +202,7 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	if index > rf.snapshotLastIndex {
 		if index <= rf.getLogsLen() {
 			// 丢弃Index之前的所有Log
-			// 3B中可能会出现index>logsLen的情况,因为Follower的Logs被Leader的Snapshot覆盖了,但是Follower已经给上层推送了该Snapshot之后的数据
+			// 3B中可能会出现index>logsLen的情况,因为Follower的Logs被Leader的Snapshot覆盖了,但是Follower已经给上层推送了该Snapshot之后的Log
 			if rf.snapshotLastIndex == 0 {
 				rf.logs = rf.logs[index-1:]
 			} else {
@@ -229,12 +230,12 @@ func (rf *Raft) sendInstallSnapshot(server int) bool {
 	ok := rf.peers[server].Call("Raft.InstallSnapshot", args, reply)
 	rf.mu.Lock()
 	if reply.FollowerTerm > rf.currentTerm {
-		// 如果接收到的RPC请求或响应中,任期号T>currentTerm,那么就令currentTerm等于T,并且切换状态为Follower
+		// 接收到的RPC请求或响应中,任期号T>currentTerm,那么就令currentTerm等于T,并且切换状态为Follower
 		rf.increaseTerm(reply.FollowerTerm)
 		ok = false
 	}
 	if args.LeaderTerm != rf.currentTerm || rf.snapshotLastIndex != args.LastIncludeIndex {
-		// 状态如果变更,请求作废
+		// 状态变更,请求作废
 		ok = false
 	}
 	return ok
@@ -244,7 +245,7 @@ func (rf *Raft) sendInstallSnapshot(server int) bool {
 func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapshotReply) {
 	rf.mu.Lock()
 	if args.LeaderTerm > rf.currentTerm {
-		// 如果接收到的RPC请求或响应中,任期号T>currentTerm,那么就令currentTerm等于T,并且切换状态为Follower
+		// 接收到的RPC请求或响应中,任期号T>currentTerm,那么就令currentTerm等于T,并且切换状态为Follower
 		rf.increaseTerm(args.LeaderTerm)
 	}
 	reply.FollowerTerm = rf.currentTerm
@@ -267,7 +268,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	if args.CandidateTerm > rf.currentTerm {
-		// 如果接收到的RPC请求或响应中,任期号T>currentTerm,那么就令currentTerm等于T,并且切换状态为Follower
+		// 接收到的RPC请求或响应中,任期号T>currentTerm,那么就令currentTerm等于T,并且切换状态为Follower
 		rf.increaseTerm(args.CandidateTerm)
 	}
 	reply.FollowerTerm = rf.currentTerm
@@ -278,10 +279,10 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 			// 自己没有Log
 			reply.VoteGranted = true
 		} else if args.CandidateLastLogTerm > rf.getLog(-1).CommandTerm {
-			// 如果两份日志最后的条目的任期号不同,那么任期号大的日志更加新,在这里Candidate的最后一个Term大于Follower
+			// 两份日志最后的条目的任期号不同,那么任期号大的日志更加新,在这里Candidate的最后一个Term大于Follower
 			reply.VoteGranted = true
 		} else if args.CandidateLastLogTerm == rf.getLog(-1).CommandTerm && args.CandidateLastLogIndex >= rf.getLogsLen() {
-			// 如果两份日志最后的条目任期号相同,那么日志比较长的那个就更加新
+			// 两份日志最后的条目任期号相同,那么日志比较长的那个就更加新
 			reply.VoteGranted = true
 		}
 		if reply.VoteGranted {
@@ -371,7 +372,7 @@ func (rf *Raft) applier() {
 			for index := rf.lastAppliedIndex + 1; index <= rf.commitIndex && index <= rf.getLogsLen(); index++ {
 				var log *ApplyMsg
 				if index <= rf.snapshotLastIndex {
-					// 如果提交的是Snapshot的内容(index在X之前)
+					// 提交的是Snapshot的内容(index在X之前)
 					index = rf.snapshotLastIndex
 					log = &ApplyMsg{
 						SnapshotValid: true,
@@ -390,7 +391,7 @@ func (rf *Raft) applier() {
 				rf.mu.Lock()
 				rf.lastAppliedIndex = log.CommandIndex
 				if rf.role == leader {
-					DPrintf("L[%v] apply snapshotLastIndex:[%v] log[%v]:%v\n", rf.me, rf.snapshotLastIndex, index, log)
+					DPrintf("L[%v] apply snapshot lastIndex[%v] log[%v]:%v\n", rf.me, rf.snapshotLastIndex, index, log)
 				}
 			}
 			rf.persist()
@@ -398,7 +399,7 @@ func (rf *Raft) applier() {
 		block := rf.lastAppliedIndex == rf.commitIndex
 		rf.mu.Unlock()
 		if block {
-			// 如果当前lastAppliedIndex是最新的,就等待唤醒
+			// 当前lastAppliedIndex是最新的,就等待唤醒
 			rf.applierCond.L.Lock()
 			rf.applierCond.Wait()
 			rf.applierCond.L.Unlock()
@@ -482,10 +483,10 @@ func (rf *Raft) collectVotes() {
 		rf.mu.Lock()
 		defer rf.mu.Unlock()
 		if reply.FollowerTerm > rf.currentTerm {
-			// 如果接收到的RPC请求或响应中,任期号T>currentTerm,那么就令currentTerm等于T,并且切换状态为Follower
+			// 接收到的RPC请求或响应中,任期号T>currentTerm,那么就令currentTerm等于T,并且切换状态为Follower
 			rf.increaseTerm(reply.FollowerTerm)
 		}
-		// 如果Term对不上(比如RPC延迟了很久)不能算入票数
+		// Term对不上(比如RPC延迟了很久)不能算入票数
 		rf.peersVoteGranted[server] = ok && reply.VoteGranted && args.CandidateTerm == rf.currentTerm
 	}
 	// args保持一致
@@ -507,7 +508,7 @@ func (rf *Raft) collectVotes() {
 	}
 }
 
-// leader,检查是否可以更新commitIndex,如果不是Leader不会唤醒这个goroutine
+// leader,检查是否可以更新commitIndex,不是Leader不会唤醒这个goroutine
 func (rf *Raft) checkCommittedLogs() {
 	for rf.killed() == false {
 		// 等待matchIndex更新后唤醒自己
@@ -515,17 +516,17 @@ func (rf *Raft) checkCommittedLogs() {
 		rf.checkCommitCond.Wait()
 		rf.checkCommitCond.L.Unlock()
 		rf.mu.Lock()
-		// 如果存在一个满足N>commitIndex的N,并且大多数的matchIndex[i]≥N成立,并且log[N].term == currentTerm成立,那么令commitIndex等于这个N
+		// 存在一个满足N>commitIndex的N,并且大多数的matchIndex[i]≥N成立,并且log[N].term == currentTerm成立,那么令commitIndex等于这个N
 		match := make([]int, len(rf.peers))
 		copy(match, rf.matchIndex)
 		match[rf.me] = rf.getLogsLen()
 		sort.Ints(match)
 		var N int
 		if len(rf.peers)%2 == 0 {
-			// 如果是偶数个Servers,(数量/2)-1的位置就是大多数
+			// 是偶数个Servers,(数量/2)-1的位置就是大多数
 			N = match[(len(rf.peers)/2)-1]
 		} else {
-			// 如果是质数个Servers,除以二即可
+			// 是质数个Servers,除以二即可
 			N = match[len(rf.peers)/2]
 		}
 		// Leader只能提交自己任期的Log,也只能通过这种方式顺带提交之前未提交的Log
@@ -600,7 +601,7 @@ func (rf *Raft) pushLog(server int, startTerm int) {
 			// 校验失败但是请求成功,减少nextIndex
 			if pushReply.ConflictTerm != -1 {
 				flag := false
-				// 如果Leader有ConflictTerm的Log,将nextIndex设为对应Term中的最后一条的下一条
+				// Leader有ConflictTerm的Log,将nextIndex设为对应Term中的最后一条的下一条
 				for _, log := range rf.logs {
 					if !flag && log.CommandTerm == pushReply.ConflictTerm {
 						flag = true
@@ -625,14 +626,14 @@ func (rf *Raft) pushLog(server int, startTerm int) {
 	}
 }
 
-// leader,给单个Follower推送新的Logs,如果nextIndex是1的话Follower无需Check,Lock的时候使用
+// leader,给单个Follower推送新的Logs,nextIndex是1的话Follower无需Check,Lock的时候使用
 func (rf *Raft) sendAppendEntries(logs []ApplyMsg, nextIndex int, server int) (bool, *AppendEntriesReply) {
 	args := &AppendEnTriesArgs{
 		LeaderTerm:   rf.currentTerm,
 		Logs:         logs,
 		LeaderCommit: rf.commitIndex,
 	}
-	// 如果新条目不是第一条日志,填入上一条的Index和Term
+	// 新条目不是第一条日志,填入上一条的Index和Term
 	if nextIndex > 1 {
 		args.PrevLogIndex, args.PrevLogTerm = nextIndex-1, rf.getLog(nextIndex-1).CommandTerm
 	}
@@ -641,7 +642,7 @@ func (rf *Raft) sendAppendEntries(logs []ApplyMsg, nextIndex int, server int) (b
 	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
 	rf.mu.Lock()
 	if reply.FollowerTerm > rf.currentTerm {
-		// 如果接收到的RPC请求或响应中,任期号T>currentTerm,那么就令currentTerm等于T,并且切换状态为Follower
+		// 接收到的RPC请求或响应中,任期号T>currentTerm,那么就令currentTerm等于T,并且切换状态为Follower
 		rf.increaseTerm(reply.FollowerTerm)
 	}
 	if args.LeaderTerm != rf.currentTerm || rf.role != leader {
@@ -660,7 +661,7 @@ func (rf *Raft) sendHeartBeatsToAll(startTerm int) {
 		rf.mu.Lock()
 		defer rf.mu.Unlock()
 		if reply.FollowerTerm > rf.currentTerm {
-			// 如果接收到的RPC请求或响应中,任期号T>currentTerm,那么就令currentTerm等于T,并且切换状态为Follower
+			// 接收到的RPC请求或响应中,任期号T>currentTerm,那么就令currentTerm等于T,并且切换状态为Follower
 			rf.increaseTerm(reply.FollowerTerm)
 		}
 	}
@@ -668,7 +669,7 @@ func (rf *Raft) sendHeartBeatsToAll(startTerm int) {
 	for rf.killed() == false {
 		rf.mu.Lock()
 		if rf.currentTerm != startTerm {
-			// 如果现在不是Leader,停止发送心跳包
+			// 现在不是Leader,停止发送心跳包
 			rf.mu.Unlock()
 			return
 		}
@@ -676,7 +677,7 @@ func (rf *Raft) sendHeartBeatsToAll(startTerm int) {
 			LeaderTerm:   rf.currentTerm,
 			LeaderCommit: rf.commitIndex,
 		}
-		// 如果Leader有Log,给Prev参数赋值
+		// Leader有Log,给Prev参数赋值
 		if rf.getLogsLen() > 0 {
 			args.PrevLogIndex = rf.getLogsLen()
 			args.PrevLogTerm = rf.getLog(-1).CommandTerm
@@ -698,7 +699,7 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 	defer rf.mu.Unlock()
 	reply.FollowerTerm = rf.currentTerm
 	if args.LeaderTerm > rf.currentTerm {
-		// 如果接收到的RPC请求或响应中,任期号T>currentTerm,那么就令currentTerm等于T,并且切换状态为Follower
+		// 接收到的RPC请求或响应中,任期号T>currentTerm,那么就令currentTerm等于T,并且切换状态为Follower
 		rf.increaseTerm(args.LeaderTerm)
 	} else if args.LeaderTerm < rf.currentTerm || rf.role == leader {
 		// 不正常的包,Leader的Term小于Follower的Term
@@ -708,16 +709,16 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 	// 检查没有问题,不管是不是心跳包,更新选举超时时间
 	rf.heartBeatTimeOut = time.Now().Add(getRandElectionTimeOut())
 	if args.PrevLogIndex < rf.snapshotLastIndex && rf.snapshotLastIndex != 0 {
-		// 如果Leader校验的Index在Follower的快照下标之前,让Leader直接从快照下标开始校验
+		// Leader校验的Index在Follower的快照下标之前,让Leader直接从快照下标开始校验
 		reply.Success = false
 		reply.ConflictIndex = rf.snapshotLastIndex
 		reply.ConflictTerm = rf.getLog(-1).CommandTerm
 	} else if args.PrevLogIndex == 0 || (args.PrevLogIndex <= rf.getLogsLen() && rf.getLog(args.PrevLogIndex).CommandTerm == args.PrevLogTerm) {
-		// 校验正常(或是第一条Log),开始逐条追加(心跳包也会走到这里,如果校验正常)
+		// 校验正常(或是第一条Log),开始逐条追加(心跳包也会走到这里,校验正常)
 		reply.Success = true
 		for _, log := range args.Logs {
 			if log.CommandIndex <= rf.getLogsLen() {
-				// Follower在这个Index有Log,如果Term不相同删除从此条Log开始的所有Log
+				// Follower在这个Index有Log,Term不相同删除从此条Log开始的所有Log
 				if rf.getLog(log.CommandIndex).CommandTerm != log.CommandTerm {
 					if rf.snapshotLastIndex == 0 {
 						rf.logs = rf.logs[:log.CommandIndex-1]
@@ -750,7 +751,7 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 	}
 	// 校验成功才会为True,只有这种情况能对commitIndex有操作
 	if reply.Success {
-		// 更新最后一条新Entry的下标,如果校验失败不会走到这里
+		// 更新最后一条新Entry的下标,校验失败不会走到这里
 		if len(args.Logs) > 0 && args.Logs[len(args.Logs)-1].CommandIndex >= rf.lastNewEntryIndex {
 			rf.lastNewEntryIndex = args.Logs[len(args.Logs)-1].CommandIndex
 		}

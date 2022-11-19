@@ -13,8 +13,8 @@ type Op struct {
 	Type        string // 任务类型
 	Key         string
 	Value       string
-	ClientTag   ClientTag       // 任务的Client
-	ClientIndex ClientTaskIndex // 对应的Client的这条任务的下标
+	ClientTag   ClientId  // 任务的Client
+	ClientIndex RequestId // 对应的Client的这条任务的下标
 }
 
 type KVServer struct {
@@ -24,8 +24,8 @@ type KVServer struct {
 	applyCh chan raft.ApplyMsg // 从Raft发送过来的Log
 	dead    int32              // 同Raft的dead
 	// 3A
-	kv                  map[string]string             // (持久化)Key/Value数据库
-	clientLastTaskIndex map[ClientTag]ClientTaskIndex // (持久化)每个客户端已完成的最后一个任务的下标
+	kv                  map[string]string      // (持久化)Key/Value数据库
+	clientLastTaskIndex map[ClientId]RequestId // (持久化)每个客户端已完成的最后一个任务的下标
 	// todo: doneTask->term
 	doneTask map[int]int        // 已完成的任务(用于校验完成的Index对应的任务是不是自己发布的任务)
 	doneCond map[int]*sync.Cond // Client发送到该Server的任务,任务完成后通知Cond回复Client
@@ -99,7 +99,7 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 }
 
 // 开始执行一条Log,Lock使用(已完成过该任务,是否为Leader,新任务的index)
-func (kv *KVServer) startOp(op string, key string, value string, clientTag ClientTag, clientTaskIndex ClientTaskIndex) (bool, bool, int, int) {
+func (kv *KVServer) startOp(op string, key string, value string, clientTag ClientId, clientTaskIndex RequestId) (bool, bool, int, int) {
 	if kv.getClientLastIndex(clientTag) >= clientTaskIndex {
 		// 这个任务已经完成过,直接返回
 		return true, false, 0, 0
@@ -129,11 +129,11 @@ func (kv *KVServer) applier() {
 		// 接受一条被Apply的Log
 		msg := <-kv.applyCh
 		kv.mu.Lock()
-		if !msg.SnapshotValid {
+		if msg.CommandValid {
+			// Command Log,解析Log中的command
+			command, _ := msg.Command.(Op)
 			// 更新最后Apply的Log的Index
 			kv.lastAppliedIndex = msg.CommandIndex
-			// 如果不是Snapshot解析Log中的command
-			command, _ := msg.Command.(Op)
 			// 检查任务是否已完成过(一个任务/Log可能会发送多次,因为前几次可能因为某种原因没有及时提交)
 			// 最后一条已完成的任务的Index必须小于当前任务才算没有完成过,因为线性一致性
 			if command.Type != "Get" && kv.getClientLastIndex(command.ClientTag) < command.ClientIndex {
@@ -170,7 +170,7 @@ func (kv *KVServer) applier() {
 				kv.saveSnapshot()
 			}
 		} else {
-			// 这条Log是Snapshot
+			// Snapshot Log
 			kv.readSnapshot(msg.Snapshot, msg.SnapshotIndex)
 		}
 		kv.mu.Unlock()
@@ -178,7 +178,7 @@ func (kv *KVServer) applier() {
 }
 
 // 通过ClientTag获得该Client完成的最后一条任务的下标,0则没有完成
-func (kv *KVServer) getClientLastIndex(client ClientTag) ClientTaskIndex {
+func (kv *KVServer) getClientLastIndex(client ClientId) RequestId {
 	if last, ok := kv.clientLastTaskIndex[client]; ok {
 		return last
 	}
@@ -194,7 +194,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 		applyCh:             applyCh,
 		maxRaftState:        maxRaftState,
 		kv:                  make(map[string]string),
-		clientLastTaskIndex: make(map[ClientTag]ClientTaskIndex),
+		clientLastTaskIndex: make(map[ClientId]RequestId),
 		doneTask:            make(map[int]int),
 		doneCond:            make(map[int]*sync.Cond),
 		persister:           persister,
@@ -223,7 +223,7 @@ func (kv *KVServer) readSnapshot(data []byte, lastIndex int) {
 	DPrintf("S[%v] start read snapshot last[%v] applied[%v]\n", kv.me, lastIndex, kv.lastAppliedIndex)
 	decoder := labgob.NewDecoder(bytes.NewBuffer(data))
 	var kvMap map[string]string
-	var clientLastTaskIndex map[ClientTag]ClientTaskIndex
+	var clientLastTaskIndex map[ClientId]RequestId
 	if decoder.Decode(&kvMap) == nil &&
 		decoder.Decode(&clientLastTaskIndex) == nil {
 		kv.kv = kvMap

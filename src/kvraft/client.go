@@ -7,20 +7,20 @@ import (
 )
 
 type task struct {
-	index    ClientTaskIndex // 对于当前Client的任务的Index
-	op       string          // 任务类型
-	key      string          // Get/PutAppend参数
-	value    string          // PutAppend参数
-	resultCh chan string     // 传Get的返回值和Block住Get/PutAppend方法
+	index    RequestId   // 对于当前Client的任务的Index
+	op       string      // 任务类型
+	key      string      // Get/PutAppend参数
+	value    string      // PutAppend参数
+	resultCh chan string // 传Get的返回值和Block住Get/PutAppend方法
 }
 
 type Clerk struct {
 	servers     []*labrpc.ClientEnd
 	taskMu      sync.Mutex
-	taskQueue   chan task       // 任务队列
-	clientTag   ClientTag       // Client的唯一标识
-	taskIndex   ClientTaskIndex // 最后一条任务的下标(包括未完成的任务)
-	leaderIndex int             // 上一次成功完成任务的Leader的Index,没有的话为-1
+	taskQueue   chan task // 任务队列
+	clientTag   ClientId  // Client的唯一标识
+	taskIndex   RequestId // 最后一条任务的下标(包括未完成的任务)
+	leaderIndex int       // 上一次成功完成任务的Leader的Index,没有的话为-1
 }
 
 func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
