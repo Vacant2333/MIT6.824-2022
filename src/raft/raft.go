@@ -158,7 +158,7 @@ func (rf *Raft) persist() {
 	}
 }
 
-// 读取状态,Lock的时候使用
+// 读取状态(仅在初始化时使用)
 func (rf *Raft) readPersist(data []byte) {
 	if data == nil || len(data) < 1 {
 		return
@@ -542,7 +542,7 @@ func (rf *Raft) pushLogsToFollower(server int, startTerm int) {
 	for rf.killed() == false {
 		rf.mu.Lock()
 		if startTerm != rf.currentTerm {
-			// 如果Leader状态改变,停止推送Logs
+			// Leader状态改变,停止推送Logs
 			DPrintf("L[%v] stop push entry to F[%v], Role:[%v] Term:[%v] startTerm:[%v]\n", rf.me, server, rf.role, rf.currentTerm, startTerm)
 			rf.mu.Unlock()
 			return
@@ -708,10 +708,10 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 	// 检查没有问题,不管是不是心跳包,更新选举超时时间
 	rf.heartBeatTimeOut = time.Now().Add(getRandElectionTimeOut())
 	if args.PrevLogIndex < rf.snapshotLastIndex && rf.snapshotLastIndex != 0 {
-		// 如果Leader校验的Index在Follower的X之前,直接要求Leader发送Snapshot
+		// 如果Leader校验的Index在Follower的快照下标之前,让Leader直接从快照下标开始校验
 		reply.Success = false
-		reply.ConflictIndex = 1
-		reply.ConflictTerm = -1
+		reply.ConflictIndex = rf.snapshotLastIndex
+		reply.ConflictTerm = rf.getLog(-1).CommandTerm
 	} else if args.PrevLogIndex == 0 || (args.PrevLogIndex <= rf.getLogsLen() && rf.getLog(args.PrevLogIndex).CommandTerm == args.PrevLogTerm) {
 		// 校验正常(或是第一条Log),开始逐条追加(心跳包也会走到这里,如果校验正常)
 		reply.Success = true

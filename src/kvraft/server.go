@@ -171,7 +171,6 @@ func (kv *KVServer) applier() {
 			}
 		} else {
 			// 这条Log是Snapshot
-			DPrintf("S[%v] get a snapshot msg[%v]\n", kv.me, msg)
 			kv.readSnapshot(msg.Snapshot, msg.SnapshotIndex)
 		}
 		kv.mu.Unlock()
