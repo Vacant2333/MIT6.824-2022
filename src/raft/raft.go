@@ -192,8 +192,11 @@ func (rf *Raft) updateCommitIndex(commitIndex int) {
 	rf.applierCond.Signal()
 }
 
-// CondInstallSnapshot 是否能安装快照
-func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int, snapshot []byte) bool {
+// CondInstallSnapshot 是否能安装快照,如果是旧的快照则返回False todo:fix
+// func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int, snapshot []byte) bool {
+// A service wants to switch to snapshot.  Only do so if Raft hasn't had more recent info since it communicate the snapshot on applyCh.
+func (rf *Raft) CondInstallSnapshot(_ int, _ int, _ []byte) bool {
+
 	return true
 }
 
