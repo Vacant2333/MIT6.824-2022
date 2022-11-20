@@ -95,14 +95,14 @@ const (
 	candidate = 2
 	leader    = 3
 
-	tickerSleepTime   = 65 * time.Millisecond  // Ticker睡眠时间
-	electionSleepTime = 20 * time.Millisecond  // 选举检查结果的睡眠时间
-	heartBeatSendTime = 130 * time.Millisecond // 心跳包发送间隔
+	tickerSleepTime   = 75 * time.Millisecond  // Ticker睡眠时间
+	electionSleepTime = 15 * time.Millisecond  // 选举检查结果的睡眠时间
+	heartBeatSendTime = 125 * time.Millisecond // 心跳包发送间隔
 	pushLogsSleepTime = 75 * time.Millisecond  // Leader推送Log的间隔
-	wakeCondSleepTime = 600 * time.Millisecond // 唤醒所有Cond的间隔
+	wakeCondSleepTime = 500 * time.Millisecond // 唤醒所有Cond的间隔
 
 	electionTimeOutMin = 300 // 选举超时时间(也用于检查是否需要开始选举) 区间
-	electionTimeOutMax = 400
+	electionTimeOutMax = 425
 )
 
 // 检查心跳是否超时
@@ -177,7 +177,6 @@ func (rf *Raft) readPersist(data []byte) {
 		if len(SnapshotData) > 0 {
 			rf.snapshotData = SnapshotData
 			rf.snapshotLastIndex = rf.logs[0].CommandIndex
-			// 启动时就把Snapshot提交上去
 			rf.updateCommitIndex(rf.snapshotLastIndex)
 		}
 		DPrintf("s[%v] readPersist logsLen:[%v] Term:[%v] snapshotLastIndex:[%v]\n", rf.me, len(logs), rf.currentTerm, rf.snapshotLastIndex)
@@ -196,12 +195,14 @@ func (rf *Raft) CondInstallSnapshot(_ int, _ int, _ []byte) bool {
 	return true
 }
 
+// Snapshot 只会被上层Server调用,也就是主动快照
 func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	rf.mu.Lock()
 	if index > rf.snapshotLastIndex {
 		// 只有新的Snapshot的Index大于之前的Index才执行以下操作
 		if index <= rf.getLogsLen() {
 			// 丢弃Index之前的所有Log,也就是[1, index]的Log的数据都集合在了Snapshot里
+			// todo:真的需要这个if吗
 			// 3B中可能会出现index>logsLen的情况,因为Follower的Logs被Leader的Snapshot覆盖了,但是Follower已经给上层推送了该Snapshot之后的Log
 			if rf.snapshotLastIndex == 0 {
 				rf.logs = rf.logs[index-1:]
@@ -241,7 +242,7 @@ func (rf *Raft) sendInstallSnapshot(server int) bool {
 	return ok
 }
 
-// InstallSnapshot Follower接收Leader发来的Snapshot要求
+// InstallSnapshot 只会被Leader调用,也就是被动快照,因为当前自身的Logs过于老旧才会被Leader调用
 func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapshotReply) {
 	rf.mu.Lock()
 	if args.LeaderTerm > rf.currentTerm {
@@ -259,11 +260,18 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 		rf.snapshotData = args.SnapshotData
 		rf.snapshotLastIndex = args.LastIncludeIndex
 		rf.persist()
+		// 发送该Snapshot到Server(状态机)
+		rf.applyCh <- ApplyMsg{
+			SnapshotValid: true,
+			Snapshot:      args.SnapshotData,
+			SnapshotTerm:  args.LastIncludeTerm,
+			SnapshotIndex: args.LastIncludeIndex,
+		}
 	}
 	rf.mu.Unlock()
 }
 
-// RequestVote follower,给Candidate投票
+// RequestVote Follower,给Candidate投票
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
@@ -356,7 +364,7 @@ func (rf *Raft) ticker() {
 // Cond唤醒器,防止状态改变时唤醒Cond失败(可能不在Wait中)
 func (rf *Raft) condWaker() {
 	for rf.killed() == false {
-		// 防止cond没有收到状态改变时的Signal,仅出现于极个别情况
+		// 防止Cond没有收到状态改变时的Signal,仅出现于极个别情况
 		rf.checkCommitCond.Signal()
 		rf.applierCond.Signal()
 		time.Sleep(wakeCondSleepTime)
@@ -370,36 +378,27 @@ func (rf *Raft) applier() {
 		if rf.commitIndex > rf.lastAppliedIndex {
 			// 有Log没有被提交上去,开始提交
 			for index := rf.lastAppliedIndex + 1; index <= rf.commitIndex && index <= rf.getLogsLen(); index++ {
-				var log ApplyMsg
 				if index <= rf.snapshotLastIndex {
-					// 提交的是Snapshot的内容(index在X之前)
+					// 提交的Index在snapshotLastIndex之前,直接从下一个开始提交
 					index = rf.snapshotLastIndex
-					log = ApplyMsg{
-						SnapshotValid: true,
-						Snapshot:      rf.snapshotData,
-						SnapshotTerm:  rf.logs[0].CommandTerm,
-						SnapshotIndex: rf.snapshotLastIndex,
-					}
+					rf.lastAppliedIndex = rf.snapshotLastIndex
+					continue
 				} else {
 					// 正常Apply Log
-					log = *rf.getLog(index)
-				}
-				// 从2D开始applyCh会卡住,必须Unlock
-				rf.mu.Unlock()
-				rf.applyCh <- log
-				rf.mu.Lock()
-				// 更新lastAppliedIndex
-				if log.CommandValid {
+					log := *rf.getLog(index)
+					// 从2D开始applyCh会卡住,必须Unlock
+					rf.mu.Unlock()
+					rf.applyCh <- log
+					rf.mu.Lock()
 					rf.lastAppliedIndex = log.CommandIndex
-				} else {
-					rf.lastAppliedIndex = log.SnapshotIndex
-				}
-				if rf.role == leader {
-					DPrintf("L[%v] apply snapshot lastIndex[%v] log[%v]:%v\n", rf.me, rf.snapshotLastIndex, index, log)
+					if rf.role == leader {
+						DPrintf("L[%v] apply snapshot lastIndex[%v] log[%v]:%v\n", rf.me, rf.snapshotLastIndex, index, log)
+					}
 				}
 			}
 			rf.persist()
 		}
+		// 是否Block住
 		block := rf.lastAppliedIndex == rf.commitIndex
 		rf.mu.Unlock()
 		if block {
@@ -570,7 +569,7 @@ func (rf *Raft) pushLog(server int, startTerm int) {
 	}
 	nextIndex := rf.nextIndex[server]
 	if nextIndex <= rf.snapshotLastIndex && rf.snapshotLastIndex != 0 {
-		// Leader没有用于同步的Log,推送Snapshot,第X条Log只能用于校验,其内容在Snapshot里
+		// Leader没有用于同步的Log,推送Snapshot,snapshotLastIndex的Log只能用于校验,其内容在Snapshot里
 		if rf.sendInstallSnapshot(server) {
 			rf.matchIndex[server] = rf.snapshotLastIndex
 			rf.nextIndex[server] = rf.snapshotLastIndex + 1

@@ -2,6 +2,7 @@ package kvraft
 
 import (
 	"bytes"
+	"fmt"
 	"mit6.824/labgob"
 	"mit6.824/labrpc"
 	"mit6.824/raft"
@@ -10,11 +11,11 @@ import (
 )
 
 type Op struct {
-	Type        string // 任务类型
-	Key         string
-	Value       string
-	ClientTag   ClientId  // 任务的Client
-	ClientIndex RequestId // 对应的Client的这条任务的下标
+	Type      string // 任务类型
+	Key       string
+	Value     string
+	ClientId  ClientId  // 任务的Client
+	RequestId RequestId // 对应的Client的这条任务的下标
 }
 
 type KVServer struct {
@@ -104,11 +105,11 @@ func (kv *KVServer) startOp(op string, key string, value string, clientTag Clien
 	}
 	// 要求Raft开始一次提交
 	index, term, isLeader := kv.rf.Start(Op{
-		Type:        op,
-		Key:         key,
-		Value:       value,
-		ClientTag:   clientTag,
-		ClientIndex: clientTaskIndex,
+		Type:      op,
+		Key:       key,
+		Value:     value,
+		ClientId:  clientTag,
+		RequestId: clientTaskIndex,
 	})
 	if !isLeader {
 		// 不是Leader
@@ -132,7 +133,7 @@ func (kv *KVServer) applier() {
 			command, _ := msg.Command.(Op)
 			// 检查任务是否已完成过(一个任务/Log可能会发送多次,因为前几次可能因为某种原因没有及时提交)
 			// 最后一条已完成的任务的Index必须小于当前任务才算没有完成过,因为线性一致性
-			if command.Type != "Get" && kv.getClientLastIndex(command.ClientTag) < command.ClientIndex {
+			if command.Type != "Get" && kv.getClientLastIndex(command.ClientId) < command.RequestId {
 				// 如果是第一次完成该任务/Log,才保存到KV中
 				if command.Type == "Put" {
 					// Put
@@ -146,9 +147,11 @@ func (kv *KVServer) applier() {
 					}
 					DPrintf("S[%v] append[%v]\n", kv.me, command.Value)
 				}
+				fmt.Printf("S[%v] true put[%v] => [%v] task[%v] index[%v]\n", kv.me, command.Key, command.Value, command.RequestId, msg.CommandIndex)
 				// 该任务的Index比之前存的任务Index大,更新
-				kv.clientLastTaskIndex[command.ClientTag] = command.ClientIndex
+				kv.clientLastTaskIndex[command.ClientId] = command.RequestId
 			} else if command.Type != "Get" {
+				fmt.Printf("S[%v] false put[%v] => [%v] task[%v]\n", kv.me, command.Key, command.Value, command.RequestId)
 				DPrintf("S[%v] didnt apply [%v]", kv.me, command.Value)
 			}
 			if cond, ok := kv.doneCond[msg.CommandIndex]; ok {
@@ -166,8 +169,8 @@ func (kv *KVServer) applier() {
 				kv.saveSnapshot(msg.CommandIndex)
 			}
 		} else {
-			// Snapshot Log
-			kv.readSnapshot(msg.Snapshot, msg.SnapshotIndex)
+			// Snapshot Log,只有在Leader发给该Server的InstallSnapshot种才会走到这里,这表明该Server的Logs过于老旧
+			kv.readSnapshot(msg.Snapshot)
 		}
 		kv.mu.Unlock()
 	}
@@ -195,6 +198,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 		doneCond:            make(map[int]*sync.Cond),
 		persister:           persister,
 	}
+	kv.readSnapshot(kv.persister.ReadSnapshot())
 	go kv.applier()
 	return kv
 }
@@ -212,7 +216,7 @@ func (kv *KVServer) saveSnapshot(lastIndex int) {
 }
 
 // 读取Snapshot
-func (kv *KVServer) readSnapshot(data []byte, lastIndex int) {
+func (kv *KVServer) readSnapshot(data []byte) {
 	if data == nil || len(data) < 1 {
 		return
 	}
@@ -223,7 +227,7 @@ func (kv *KVServer) readSnapshot(data []byte, lastIndex int) {
 		decoder.Decode(&clientLastTaskIndex) == nil {
 		kv.kv = kvMap
 		kv.clientLastTaskIndex = clientLastTaskIndex
-		DPrintf("S[%v] read snapshot(%v, %v)\n", kv.me, lastIndex, len(data))
+		DPrintf("S[%v] readSnapshot(%v)\n", kv.me, len(data))
 	}
 }
 
