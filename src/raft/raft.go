@@ -11,12 +11,12 @@ import (
 )
 
 type ApplyMsg struct {
-	CommandValid bool
+	CommandValid bool // 如果是Command Msg,则为True
 	Command      interface{}
 	CommandIndex int
 	CommandTerm  int
 
-	SnapshotValid bool
+	SnapshotValid bool   // 如果是Snapshot Msg,则为True
 	Snapshot      []byte // Snapshot的内容(KV)
 	SnapshotTerm  int    // Snapshot的最后一条Log的Term
 	SnapshotIndex int    // Snapshot的最后一条Log的Index
@@ -192,19 +192,16 @@ func (rf *Raft) updateCommitIndex(commitIndex int) {
 	rf.applierCond.Signal()
 }
 
-// CondInstallSnapshot 是否能安装快照,如果是旧的快照则返回False todo:fix
-// func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int, snapshot []byte) bool {
-// A service wants to switch to snapshot.  Only do so if Raft hasn't had more recent info since it communicate the snapshot on applyCh.
 func (rf *Raft) CondInstallSnapshot(_ int, _ int, _ []byte) bool {
-
 	return true
 }
 
 func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	rf.mu.Lock()
 	if index > rf.snapshotLastIndex {
+		// 只有新的Snapshot的Index大于之前的Index才执行以下操作
 		if index <= rf.getLogsLen() {
-			// 丢弃Index之前的所有Log
+			// 丢弃Index之前的所有Log,也就是[1, index]的Log的数据都集合在了Snapshot里
 			// 3B中可能会出现index>logsLen的情况,因为Follower的Logs被Leader的Snapshot覆盖了,但是Follower已经给上层推送了该Snapshot之后的Log
 			if rf.snapshotLastIndex == 0 {
 				rf.logs = rf.logs[index-1:]
@@ -312,7 +309,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	if isLeader {
 		index = rf.getLogsLen() + 1
 		log := ApplyMsg{
-			CommandValid: false,
+			CommandValid: true,
 			Command:      command,
 			CommandIndex: index,
 			CommandTerm:  term,
@@ -373,11 +370,11 @@ func (rf *Raft) applier() {
 		if rf.commitIndex > rf.lastAppliedIndex {
 			// 有Log没有被提交上去,开始提交
 			for index := rf.lastAppliedIndex + 1; index <= rf.commitIndex && index <= rf.getLogsLen(); index++ {
-				var log *ApplyMsg
+				var log ApplyMsg
 				if index <= rf.snapshotLastIndex {
 					// 提交的是Snapshot的内容(index在X之前)
 					index = rf.snapshotLastIndex
-					log = &ApplyMsg{
+					log = ApplyMsg{
 						SnapshotValid: true,
 						Snapshot:      rf.snapshotData,
 						SnapshotTerm:  rf.logs[0].CommandTerm,
@@ -385,14 +382,18 @@ func (rf *Raft) applier() {
 					}
 				} else {
 					// 正常Apply Log
-					log = rf.getLog(index)
-					log.CommandValid = true
+					log = *rf.getLog(index)
 				}
 				// 从2D开始applyCh会卡住,必须Unlock
 				rf.mu.Unlock()
-				rf.applyCh <- *log
+				rf.applyCh <- log
 				rf.mu.Lock()
-				rf.lastAppliedIndex = log.CommandIndex
+				// 更新lastAppliedIndex
+				if log.CommandValid {
+					rf.lastAppliedIndex = log.CommandIndex
+				} else {
+					rf.lastAppliedIndex = log.SnapshotIndex
+				}
 				if rf.role == leader {
 					DPrintf("L[%v] apply snapshot lastIndex[%v] log[%v]:%v\n", rf.me, rf.snapshotLastIndex, index, log)
 				}
