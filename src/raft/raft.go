@@ -89,7 +89,7 @@ type Raft struct {
 }
 
 const (
-	Debug = false
+	Debug = true
 
 	follower  = 1
 	candidate = 2
@@ -243,44 +243,44 @@ func (rf *Raft) sendInstallSnapshot(server int) bool {
 func (rf *Raft) CondInstallSnapshot(LastIncludeTerm int, LastIncludeIndex int, SnapshotData []byte) bool {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	// LastIncludeIndex一定要大于commitIndex,这样能保证没有新的Log被提交
-	if LastIncludeIndex > rf.commitIndex {
-		// 清空Follower的Logs,存入第一条(也就是Snapshot的最后一条)Log
-		rf.logs = make([]ApplyMsg, 1)
-		rf.logs[0] = ApplyMsg{
-			CommandIndex: LastIncludeIndex,
-			CommandTerm:  LastIncludeTerm,
-		}
-		rf.snapshotData = SnapshotData
-		rf.snapshotLastIndex = LastIncludeIndex
-		rf.persist()
-		// 重设Raft的状态(index一定是大于当前commitIndex的)
-		rf.lastAppliedIndex = LastIncludeIndex
-		rf.commitIndex = LastIncludeIndex
-		return true
+	if LastIncludeIndex <= rf.commitIndex {
+		// LastIncludeIndex小于等于commitIndex,这样不能保证没有新的Log被提交
+		return false
 	}
-	return false
+	// 清空Follower的Logs,存入第一条(也就是Snapshot的最后一条)Log
+	rf.logs = make([]ApplyMsg, 1)
+	rf.logs[0] = ApplyMsg{
+		CommandIndex: LastIncludeIndex,
+		CommandTerm:  LastIncludeTerm,
+	}
+	rf.snapshotData = SnapshotData
+	rf.snapshotLastIndex = LastIncludeIndex
+	rf.persist()
+	// 重设Raft的状态(index一定是大于当前commitIndex的)
+	rf.lastAppliedIndex = LastIncludeIndex
+	rf.commitIndex = LastIncludeIndex
+	return true
 }
 
 // InstallSnapshot 只会被Leader调用,也就是被动快照,因为当前自身的Logs过于老旧才会被Leader调用
 func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapshotReply) {
 	rf.mu.Lock()
+	defer rf.mu.Unlock()
 	if args.LeaderTerm > rf.currentTerm {
 		// 接收到的RPC请求或响应中,任期号T>currentTerm,那么就令currentTerm等于T,并且切换状态为Follower
 		rf.increaseTerm(args.LeaderTerm)
 	}
 	reply.FollowerTerm = rf.currentTerm
-	if rf.currentTerm <= args.LeaderTerm && args.LastIncludeIndex > rf.snapshotLastIndex {
-		// 发送该Snapshot到Server(状态机)
-		rf.mu.Unlock()
-		rf.applyCh <- ApplyMsg{
-			SnapshotValid: true,
-			Snapshot:      args.SnapshotData,
-			SnapshotTerm:  args.LastIncludeTerm,
-			SnapshotIndex: args.LastIncludeIndex,
-		}
-	} else {
-		rf.mu.Unlock()
+	if rf.currentTerm <= args.LeaderTerm && args.LastIncludeIndex > rf.commitIndex {
+		// 发送该Snapshot到Server(状态机),使用goroutine避免被阻塞
+		go func() {
+			rf.applyCh <- ApplyMsg{
+				SnapshotValid: true,
+				Snapshot:      args.SnapshotData,
+				SnapshotTerm:  args.LastIncludeTerm,
+				SnapshotIndex: args.LastIncludeIndex,
+			}
+		}()
 	}
 }
 

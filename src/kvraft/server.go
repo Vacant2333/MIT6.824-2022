@@ -2,7 +2,6 @@ package kvraft
 
 import (
 	"bytes"
-	"fmt"
 	"mit6.824/labgob"
 	"mit6.824/labrpc"
 	"mit6.824/raft"
@@ -147,11 +146,9 @@ func (kv *KVServer) applier() {
 					}
 					DPrintf("S[%v] append[%v]\n", kv.me, command.Value)
 				}
-				fmt.Printf("S[%v] true put[%v] => [%v] task[%v] index[%v]\n", kv.me, command.Key, command.Value, command.RequestId, msg.CommandIndex)
 				// 该任务的Index比之前存的任务Index大,更新
 				kv.clientLastTaskIndex[command.ClientId] = command.RequestId
 			} else if command.Type != "Get" {
-				fmt.Printf("S[%v] false put[%v] => [%v] task[%v]\n", kv.me, command.Key, command.Value, command.RequestId)
 				DPrintf("S[%v] didnt apply [%v]", kv.me, command.Value)
 			}
 			if cond, ok := kv.doneCond[msg.CommandIndex]; ok {
