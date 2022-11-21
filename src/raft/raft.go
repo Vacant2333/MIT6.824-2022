@@ -2,7 +2,6 @@ package raft
 
 import (
 	"bytes"
-	"fmt"
 	"mit6.824/labgob"
 	"mit6.824/labrpc"
 	"sort"
@@ -90,7 +89,7 @@ type Raft struct {
 }
 
 const (
-	Debug = true
+	Debug = false
 
 	follower  = 1
 	candidate = 2
@@ -239,22 +238,23 @@ func (rf *Raft) sendInstallSnapshot(server int) bool {
 	return ok
 }
 
-// CondInstallSnapshot Server询问Raft是否要切换到这个Snapshot
+// CondInstallSnapshot Server询问Raft是否要切换到这个Snapshot,只有在InstallSnapshot被调用之后才会调用该函数
+// 只有该函数返回True,Raft和Server才会保存该快照,否则两者都不保存
 func (rf *Raft) CondInstallSnapshot(LastIncludeTerm int, LastIncludeIndex int, SnapshotData []byte) bool {
-	// 只有在InstallSnapshot被调用之后才会调用该函数,在这个期间Raft是Lock状态
+	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	if LastIncludeIndex > rf.lastAppliedIndex {
+	// LastIncludeIndex一定要大于commitIndex,这样能保证没有新的Log被提交
+	if LastIncludeIndex > rf.commitIndex {
 		// 清空Follower的Logs,存入第一条(也就是Snapshot的最后一条)Log
-		rf.logs = make([]ApplyMsg, 0)
-		lastLog := ApplyMsg{
+		rf.logs = make([]ApplyMsg, 1)
+		rf.logs[0] = ApplyMsg{
 			CommandIndex: LastIncludeIndex,
 			CommandTerm:  LastIncludeTerm,
 		}
-		rf.logs = append(rf.logs, lastLog)
 		rf.snapshotData = SnapshotData
 		rf.snapshotLastIndex = LastIncludeIndex
 		rf.persist()
-		// 更新Raft的状态
+		// 重设Raft的状态(index一定是大于当前commitIndex的)
 		rf.lastAppliedIndex = LastIncludeIndex
 		rf.commitIndex = LastIncludeIndex
 		return true
@@ -272,14 +272,13 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 	reply.FollowerTerm = rf.currentTerm
 	if rf.currentTerm <= args.LeaderTerm && args.LastIncludeIndex > rf.snapshotLastIndex {
 		// 发送该Snapshot到Server(状态机)
-		fmt.Printf("s[%v] try send snapshot last[%v]\n", rf.me, args.LastIncludeIndex)
+		rf.mu.Unlock()
 		rf.applyCh <- ApplyMsg{
 			SnapshotValid: true,
 			Snapshot:      args.SnapshotData,
 			SnapshotTerm:  args.LastIncludeTerm,
 			SnapshotIndex: args.LastIncludeIndex,
 		}
-		// 这里不Unlock,等到Server调用CondInstallSnapshot才Unlock
 	} else {
 		rf.mu.Unlock()
 	}
@@ -403,7 +402,6 @@ func (rf *Raft) applier() {
 					rf.lastAppliedIndex = log.CommandIndex
 					// 从2D开始applyCh会卡住,必须Unlock
 					rf.mu.Unlock()
-					fmt.Printf("s[%v] try push log index[%v]\n", rf.me, log.CommandIndex)
 					rf.applyCh <- log
 					rf.mu.Lock()
 					if rf.role == leader {

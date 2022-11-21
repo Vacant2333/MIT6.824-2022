@@ -168,7 +168,7 @@ func (kv *KVServer) applier() {
 				// Raft状态的大小接近阈值,要求Raft进行Snapshot
 				kv.saveSnapshot(msg.CommandIndex)
 			}
-		} else {
+		} else if msg.SnapshotValid {
 			// Snapshot Log,只有在Leader发给该Server的InstallSnapshot种才会走到这里,这表明该Server的Logs过于老旧
 			if kv.rf.CondInstallSnapshot(msg.SnapshotTerm, msg.SnapshotIndex, msg.Snapshot) {
 				kv.readSnapshot(msg.Snapshot)
