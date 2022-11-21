@@ -2,6 +2,7 @@ package raft
 
 import (
 	"bytes"
+	"fmt"
 	"mit6.824/labgob"
 	"mit6.824/labrpc"
 	"sort"
@@ -89,7 +90,7 @@ type Raft struct {
 }
 
 const (
-	Debug = false
+	Debug = true
 
 	follower  = 1
 	candidate = 2
@@ -191,10 +192,6 @@ func (rf *Raft) updateCommitIndex(commitIndex int) {
 	rf.applierCond.Signal()
 }
 
-func (rf *Raft) CondInstallSnapshot(_ int, _ int, _ []byte) bool {
-	return true
-}
-
 // Snapshot 只会被上层Server调用,也就是主动快照
 func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	rf.mu.Lock()
@@ -242,6 +239,29 @@ func (rf *Raft) sendInstallSnapshot(server int) bool {
 	return ok
 }
 
+// CondInstallSnapshot Server询问Raft是否要切换到这个Snapshot
+func (rf *Raft) CondInstallSnapshot(LastIncludeTerm int, LastIncludeIndex int, SnapshotData []byte) bool {
+	// 只有在InstallSnapshot被调用之后才会调用该函数,在这个期间Raft是Lock状态
+	defer rf.mu.Unlock()
+	if LastIncludeIndex > rf.lastAppliedIndex {
+		// 清空Follower的Logs,存入第一条(也就是Snapshot的最后一条)Log
+		rf.logs = make([]ApplyMsg, 0)
+		lastLog := ApplyMsg{
+			CommandIndex: LastIncludeIndex,
+			CommandTerm:  LastIncludeTerm,
+		}
+		rf.logs = append(rf.logs, lastLog)
+		rf.snapshotData = SnapshotData
+		rf.snapshotLastIndex = LastIncludeIndex
+		rf.persist()
+		// 更新Raft的状态
+		rf.lastAppliedIndex = LastIncludeIndex
+		rf.commitIndex = LastIncludeIndex
+		return true
+	}
+	return false
+}
+
 // InstallSnapshot 只会被Leader调用,也就是被动快照,因为当前自身的Logs过于老旧才会被Leader调用
 func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapshotReply) {
 	rf.mu.Lock()
@@ -251,24 +271,18 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 	}
 	reply.FollowerTerm = rf.currentTerm
 	if rf.currentTerm <= args.LeaderTerm && args.LastIncludeIndex > rf.snapshotLastIndex {
-		rf.logs = make([]ApplyMsg, 0)
-		lastLog := ApplyMsg{
-			CommandIndex: args.LastIncludeIndex,
-			CommandTerm:  args.LastIncludeTerm,
-		}
-		rf.logs = append(rf.logs, lastLog)
-		rf.snapshotData = args.SnapshotData
-		rf.snapshotLastIndex = args.LastIncludeIndex
-		rf.persist()
 		// 发送该Snapshot到Server(状态机)
+		fmt.Printf("s[%v] try send snapshot last[%v]\n", rf.me, args.LastIncludeIndex)
 		rf.applyCh <- ApplyMsg{
 			SnapshotValid: true,
 			Snapshot:      args.SnapshotData,
 			SnapshotTerm:  args.LastIncludeTerm,
 			SnapshotIndex: args.LastIncludeIndex,
 		}
+		// 这里不Unlock,等到Server调用CondInstallSnapshot才Unlock
+	} else {
+		rf.mu.Unlock()
 	}
-	rf.mu.Unlock()
 }
 
 // RequestVote Follower,给Candidate投票
@@ -386,11 +400,12 @@ func (rf *Raft) applier() {
 				} else {
 					// 正常Apply Log
 					log := *rf.getLog(index)
+					rf.lastAppliedIndex = log.CommandIndex
 					// 从2D开始applyCh会卡住,必须Unlock
 					rf.mu.Unlock()
+					fmt.Printf("s[%v] try push log index[%v]\n", rf.me, log.CommandIndex)
 					rf.applyCh <- log
 					rf.mu.Lock()
-					rf.lastAppliedIndex = log.CommandIndex
 					if rf.role == leader {
 						DPrintf("L[%v] apply snapshot lastIndex[%v] log[%v]:%v\n", rf.me, rf.snapshotLastIndex, index, log)
 					}
@@ -484,13 +499,13 @@ func (rf *Raft) collectVotes() {
 		reply := &RequestVoteReply{}
 		ok := rf.sendRequestVote(server, args, reply)
 		rf.mu.Lock()
-		defer rf.mu.Unlock()
 		if reply.FollowerTerm > rf.currentTerm {
 			// 接收到的RPC请求或响应中,任期号T>currentTerm,那么就令currentTerm等于T,并且切换状态为Follower
 			rf.increaseTerm(reply.FollowerTerm)
 		}
 		// Term对不上(比如RPC延迟了很久)不能算入票数
 		rf.peersVoteGranted[server] = ok && reply.VoteGranted && args.CandidateTerm == rf.currentTerm
+		rf.mu.Unlock()
 	}
 	// args保持一致
 	rf.mu.Lock()
@@ -541,7 +556,7 @@ func (rf *Raft) checkCommittedLogs() {
 	}
 }
 
-// leader,持续推送Logs给Follower
+// Leader,持续推送Logs给Follower
 func (rf *Raft) pushLogsToFollower(server int, startTerm int) {
 	for rf.killed() == false {
 		rf.mu.Lock()
@@ -550,17 +565,15 @@ func (rf *Raft) pushLogsToFollower(server int, startTerm int) {
 			DPrintf("L[%v] stop push entry to F[%v], Role:[%v] Term:[%v] startTerm:[%v]\n", rf.me, server, rf.role, rf.currentTerm, startTerm)
 			rf.mu.Unlock()
 			return
-		}
-		if rf.getLogsLen() >= rf.nextIndex[server] {
-			rf.mu.Unlock()
+		} else if rf.getLogsLen() >= rf.nextIndex[server] {
 			go rf.pushLog(server, startTerm)
-		} else {
-			rf.mu.Unlock()
 		}
+		rf.mu.Unlock()
 		time.Sleep(pushLogsSleepTime)
 	}
 }
 
+// Leader给某个Follower推送Log
 func (rf *Raft) pushLog(server int, startTerm int) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
@@ -576,7 +589,7 @@ func (rf *Raft) pushLog(server int, startTerm int) {
 			// matchIndex状态改变,唤醒checkCommit
 			rf.checkCommitCond.Signal()
 		}
-		DPrintf("L[%v] push Snapshot to F[%v] snapshotLastIndex:[%v]\n", rf.me, server, rf.snapshotLastIndex)
+		DPrintf("L[%v] try send Snapshot to F[%v] snapshotLastIndex:[%v]\n", rf.me, server, rf.snapshotLastIndex)
 	} else {
 		// 正常追加
 		var pushLogs []ApplyMsg

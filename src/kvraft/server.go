@@ -170,7 +170,9 @@ func (kv *KVServer) applier() {
 			}
 		} else {
 			// Snapshot Log,只有在Leader发给该Server的InstallSnapshot种才会走到这里,这表明该Server的Logs过于老旧
-			kv.readSnapshot(msg.Snapshot)
+			if kv.rf.CondInstallSnapshot(msg.SnapshotTerm, msg.SnapshotIndex, msg.Snapshot) {
+				kv.readSnapshot(msg.Snapshot)
+			}
 		}
 		kv.mu.Unlock()
 	}
