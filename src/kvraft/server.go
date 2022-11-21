@@ -209,7 +209,7 @@ func (kv *KVServer) saveSnapshot(lastIndex int) {
 	if encoder.Encode(kv.kv) == nil &&
 		encoder.Encode(kv.clientLastTaskIndex) == nil {
 		kv.rf.Snapshot(lastIndex, writer.Bytes())
-		DPrintf("S[%v] save snapshot(%v, %v)\n", kv.me, lastIndex, len(writer.Bytes()))
+		DPrintf("S[%v] save snapshot(%v)\n", kv.me, lastIndex)
 	}
 	kv.clean(lastIndex)
 }
@@ -226,7 +226,7 @@ func (kv *KVServer) readSnapshot(data []byte) {
 		decoder.Decode(&clientLastTaskIndex) == nil {
 		kv.kv = kvMap
 		kv.clientLastTaskIndex = clientLastTaskIndex
-		DPrintf("S[%v] readSnapshot(%v)\n", kv.me, len(data))
+		DPrintf("S[%v] readSnapshot\n", kv.me)
 	}
 }
 

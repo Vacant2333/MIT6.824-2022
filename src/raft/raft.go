@@ -89,20 +89,20 @@ type Raft struct {
 }
 
 const (
-	Debug = true
+	Debug = false
 
 	follower  = 1
 	candidate = 2
 	leader    = 3
 
-	tickerSleepTime   = 75 * time.Millisecond  // Ticker睡眠时间
-	electionSleepTime = 15 * time.Millisecond  // 选举检查结果的睡眠时间
+	tickerSleepTime   = 70 * time.Millisecond  // Ticker睡眠时间
+	electionSleepTime = 10 * time.Millisecond  // 选举检查结果的睡眠时间
 	heartBeatSendTime = 125 * time.Millisecond // 心跳包发送间隔
-	pushLogsSleepTime = 75 * time.Millisecond  // Leader推送Log的间隔
-	wakeCondSleepTime = 500 * time.Millisecond // 唤醒所有Cond的间隔
+	pushLogsSleepTime = 60 * time.Millisecond  // Leader推送Log的间隔
+	wakeCondSleepTime = 450 * time.Millisecond // 唤醒所有Cond的间隔
 
 	electionTimeOutMin = 300 // 选举超时时间(也用于检查是否需要开始选举) 区间
-	electionTimeOutMax = 425
+	electionTimeOutMax = 400
 )
 
 // 检查心跳是否超时
@@ -196,15 +196,11 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	rf.mu.Lock()
 	if index > rf.snapshotLastIndex {
 		// 只有新的Snapshot的Index大于之前的Index才执行以下操作
-		if index <= rf.getLogsLen() {
-			// 丢弃Index之前的所有Log,也就是[1, index]的Log的数据都集合在了Snapshot里
-			// todo:真的需要这个if吗
-			// 3B中可能会出现index>logsLen的情况,因为Follower的Logs被Leader的Snapshot覆盖了,但是Follower已经给上层推送了该Snapshot之后的Log
-			if rf.snapshotLastIndex == 0 {
-				rf.logs = rf.logs[index-1:]
-			} else {
-				rf.logs = rf.logs[index-rf.snapshotLastIndex:]
-			}
+		// 丢弃Index之前的所有Log,[1, Index]的Log的数据都集合在了Snapshot里
+		if rf.snapshotLastIndex == 0 {
+			rf.logs = rf.logs[index-1:]
+		} else {
+			rf.logs = rf.logs[index-rf.snapshotLastIndex:]
 		}
 		rf.snapshotData = snapshot
 		rf.snapshotLastIndex = index
