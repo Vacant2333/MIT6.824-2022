@@ -98,7 +98,7 @@ const (
 	tickerSleepTime   = 70 * time.Millisecond  // Ticker睡眠时间
 	electionSleepTime = 10 * time.Millisecond  // 选举检查结果的睡眠时间
 	heartBeatSendTime = 125 * time.Millisecond // 心跳包发送间隔
-	pushLogsSleepTime = 60 * time.Millisecond  // Leader推送Log的间隔
+	pushLogsSleepTime = 45 * time.Millisecond  // Leader推送Log的间隔
 	wakeCondSleepTime = 450 * time.Millisecond // 唤醒所有Cond的间隔
 
 	electionTimeOutMin = 300 // 选举超时时间(也用于检查是否需要开始选举) 区间
@@ -219,6 +219,7 @@ func (rf *Raft) sendInstallSnapshot(server int) bool {
 		SnapshotData:     rf.snapshotData,
 	}
 	reply := &InstallSnapshotReply{}
+	DPrintf("L[%v] start send Snapshot to s[%v] snapshotLastIndex:[%v]\n", rf.me, server, rf.snapshotLastIndex)
 	rf.mu.Unlock()
 	ok := rf.peers[server].Call("Raft.InstallSnapshot", args, reply)
 	rf.mu.Lock()
@@ -231,6 +232,7 @@ func (rf *Raft) sendInstallSnapshot(server int) bool {
 		// 状态变更,请求作废
 		ok = false
 	}
+	DPrintf("L[%v] end send Snapshot to s[%v] snapshotLastIndex:[%v]\n", rf.me, server, rf.snapshotLastIndex)
 	return ok
 }
 
@@ -239,7 +241,7 @@ func (rf *Raft) sendInstallSnapshot(server int) bool {
 func (rf *Raft) CondInstallSnapshot(LastIncludeTerm int, LastIncludeIndex int, SnapshotData []byte) bool {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	if LastIncludeIndex <= rf.commitIndex {
+	if LastIncludeIndex <= rf.commitIndex || rf.lastAppliedIndex < rf.commitIndex {
 		// LastIncludeIndex小于等于commitIndex,这样不能保证没有新的Log被提交
 		return false
 	}
@@ -267,7 +269,7 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 		rf.increaseTerm(args.LeaderTerm)
 	}
 	reply.FollowerTerm = rf.currentTerm
-	if rf.currentTerm <= args.LeaderTerm && args.LastIncludeIndex > rf.commitIndex {
+	if rf.currentTerm <= args.LeaderTerm && args.LastIncludeIndex > rf.commitIndex && rf.lastAppliedIndex == rf.commitIndex {
 		// 发送该Snapshot到Server(状态机),使用goroutine避免被阻塞
 		go func() {
 			rf.applyCh <- ApplyMsg{
@@ -395,14 +397,11 @@ func (rf *Raft) applier() {
 				} else {
 					// 正常Apply Log
 					log := *rf.getLog(index)
-					rf.lastAppliedIndex = log.CommandIndex
 					// 从2D开始applyCh会卡住,必须Unlock
 					rf.mu.Unlock()
 					rf.applyCh <- log
 					rf.mu.Lock()
-					if rf.role == leader {
-						DPrintf("L[%v] apply snapshot lastIndex[%v] log[%v]:%v\n", rf.me, rf.snapshotLastIndex, index, log)
-					}
+					rf.lastAppliedIndex = log.CommandIndex
 				}
 			}
 			rf.persist()
@@ -583,7 +582,6 @@ func (rf *Raft) pushLog(server int, startTerm int) {
 			// matchIndex状态改变,唤醒checkCommit
 			rf.checkCommitCond.Signal()
 		}
-		DPrintf("L[%v] try send Snapshot to F[%v] snapshotLastIndex:[%v]\n", rf.me, server, rf.snapshotLastIndex)
 	} else {
 		// 正常追加
 		var pushLogs []ApplyMsg

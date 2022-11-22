@@ -144,12 +144,10 @@ func (kv *KVServer) applier() {
 					} else {
 						kv.kv[command.Key] = command.Value
 					}
-					DPrintf("S[%v] append[%v]\n", kv.me, command.Value)
+					DPrintf("S[%v] append[%v] index[%v] result[%v]\n", kv.me, command.Value, msg.CommandIndex, kv.kv[command.Key])
 				}
 				// 该任务的Index比之前存的任务Index大,更新
 				kv.clientLastTaskIndex[command.ClientId] = command.RequestId
-			} else if command.Type != "Get" {
-				DPrintf("S[%v] didnt apply [%v]", kv.me, command.Value)
 			}
 			if cond, ok := kv.doneCond[msg.CommandIndex]; ok {
 				// 这个任务被给到过自己,保存它的Term,用来校验
@@ -157,7 +155,7 @@ func (kv *KVServer) applier() {
 				// 通知所有在等待该任务的goroutine
 				cond.Broadcast()
 				if command.Type == "Get" {
-					DPrintf("s[%v] get[%v]\n", kv.me, command.Key)
+					DPrintf("s[%v] get[%v] index[%v]\n", kv.me, command.Key, msg.CommandIndex)
 				}
 			}
 			// 检查是否需要Snapshot

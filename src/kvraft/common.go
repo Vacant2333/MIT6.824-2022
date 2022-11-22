@@ -8,18 +8,18 @@ import (
 )
 
 const (
-	Debug = true
+	Debug = false
 
 	OK             = "OK"
 	ErrNoKey       = "ErrNoKey"
 	ErrWrongLeader = "ErrWrongLeader"
 	ErrNoLeader    = "ErrNoLeader"
 	// Client任务超时
-	clientDoTaskTimeOut = 1000 * time.Millisecond
+	clientDoTaskTimeOut = 800 * time.Millisecond
 	// Client没找到Leader的等待时间
 	clientNoLeaderSleepTime = 30 * time.Millisecond
 	// 当Raft的ReadStateSize大于(该值*maxRaftState)时开始Snapshot
-	serverSnapshotStatePercent = 0.8
+	serverSnapshotStatePercent = 0.9
 )
 
 type Err string
