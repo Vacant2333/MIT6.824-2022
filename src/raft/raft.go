@@ -89,17 +89,17 @@ type Raft struct {
 }
 
 const (
-	Debug = false
+	Debug = true
 
 	follower  = 1
 	candidate = 2
 	leader    = 3
 
-	tickerSleepTime   = 70 * time.Millisecond  // Ticker睡眠时间
-	electionSleepTime = 10 * time.Millisecond  // 选举检查结果的睡眠时间
-	heartBeatSendTime = 125 * time.Millisecond // 心跳包发送间隔
-	pushLogsSleepTime = 45 * time.Millisecond  // Leader推送Log的间隔
-	wakeCondSleepTime = 450 * time.Millisecond // 唤醒所有Cond的间隔
+	tickerSleepTime   = 60 * time.Millisecond  // Ticker睡眠时间
+	electionSleepTime = 25 * time.Millisecond  // 选举检查结果的睡眠时间
+	heartBeatSendTime = 130 * time.Millisecond // 心跳包发送间隔
+	pushLogsSleepTime = 70 * time.Millisecond  // Leader推送Log的间隔
+	wakeCondSleepTime = 550 * time.Millisecond // 唤醒所有Cond的间隔
 
 	electionTimeOutMin = 300 // 选举超时时间(也用于检查是否需要开始选举) 区间
 	electionTimeOutMax = 400
@@ -179,7 +179,7 @@ func (rf *Raft) readPersist(data []byte) {
 			rf.snapshotLastIndex = rf.logs[0].CommandIndex
 			rf.updateCommitIndex(rf.snapshotLastIndex)
 		}
-		DPrintf("s[%v] readPersist logsLen:[%v] Term:[%v] snapshotLastIndex:[%v]\n", rf.me, len(logs), rf.currentTerm, rf.snapshotLastIndex)
+		DPrintf("s[%v] readPersist logsLen:[%v] Term:[%v] snapshotLastIndex:[%v]\n", rf.me, rf.getLogsLen(), rf.currentTerm, rf.snapshotLastIndex)
 	}
 }
 
@@ -195,7 +195,6 @@ func (rf *Raft) updateCommitIndex(commitIndex int) {
 func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	rf.mu.Lock()
 	if index > rf.snapshotLastIndex {
-		// 只有新的Snapshot的Index大于之前的Index才执行以下操作
 		// 丢弃Index之前的所有Log,[1, Index]的Log的数据都集合在了Snapshot里
 		if rf.snapshotLastIndex == 0 {
 			rf.logs = rf.logs[index-1:]
@@ -205,13 +204,13 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 		rf.snapshotData = snapshot
 		rf.snapshotLastIndex = index
 		rf.persist()
-		DPrintf("s[%v] snapshot Index:[%v] logsLen:[%v] snapshotLastIndex:[%v]\n", rf.me, index, rf.getLogsLen(), rf.snapshotLastIndex)
+		DPrintf("s[%v] snapshot Index:[%v] logsLen:[%v] snapshotLastIndex:[%v] nowSize[%v]\n", rf.me, index, rf.getLogsLen(), rf.snapshotLastIndex, rf.persister.RaftStateSize())
 	}
 	rf.mu.Unlock()
 }
 
 // leader,发送Snapshot给Follower,Lock使用
-func (rf *Raft) sendInstallSnapshot(server int) bool {
+func (rf *Raft) sendInstallSnapshot(server int) {
 	args := &InstallSnapshotArgs{
 		LeaderTerm:       rf.currentTerm,
 		LastIncludeIndex: rf.snapshotLastIndex,
@@ -219,7 +218,7 @@ func (rf *Raft) sendInstallSnapshot(server int) bool {
 		SnapshotData:     rf.snapshotData,
 	}
 	reply := &InstallSnapshotReply{}
-	DPrintf("L[%v] start send Snapshot to s[%v] snapshotLastIndex:[%v]\n", rf.me, server, rf.snapshotLastIndex)
+	DPrintf("L[%v] try send Snapshot to s[%v] snapshotLastIndex:[%v]\n", rf.me, server, rf.snapshotLastIndex)
 	rf.mu.Unlock()
 	ok := rf.peers[server].Call("Raft.InstallSnapshot", args, reply)
 	rf.mu.Lock()
@@ -232,8 +231,12 @@ func (rf *Raft) sendInstallSnapshot(server int) bool {
 		// 状态变更,请求作废
 		ok = false
 	}
-	DPrintf("L[%v] end send Snapshot to s[%v] snapshotLastIndex:[%v]\n", rf.me, server, rf.snapshotLastIndex)
-	return ok
+	if ok {
+		rf.matchIndex[server] = args.LastIncludeIndex
+		rf.nextIndex[server] = args.LastIncludeIndex + 1
+		// matchIndex状态改变,唤醒checkCommit
+		rf.checkCommitCond.Signal()
+	}
 }
 
 // CondInstallSnapshot Server询问Raft是否要切换到这个Snapshot,只有在InstallSnapshot被调用之后才会调用该函数
@@ -241,23 +244,31 @@ func (rf *Raft) sendInstallSnapshot(server int) bool {
 func (rf *Raft) CondInstallSnapshot(LastIncludeTerm int, LastIncludeIndex int, SnapshotData []byte) bool {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	if LastIncludeIndex <= rf.commitIndex || rf.lastAppliedIndex < rf.commitIndex {
-		// LastIncludeIndex小于等于commitIndex,这样不能保证没有新的Log被提交
-		return false
+	if rf.isAvailableSnapshot(LastIncludeIndex) {
+		// 清空Follower的Logs,存入第一条(也就是Snapshot的最后一条)Log
+		if rf.getLogsLen() >= LastIncludeIndex {
+			// Follower有比Snapshot多的Log,不能清空,丢弃Index之前的所有Log
+			if rf.snapshotLastIndex == 0 {
+				rf.logs = rf.logs[LastIncludeIndex-1:]
+			} else {
+				rf.logs = rf.logs[LastIncludeIndex-rf.snapshotLastIndex:]
+			}
+		} else {
+			rf.logs = make([]ApplyMsg, 1)
+		}
+		// 不管如何都要重置Snapshot对应的那条Log,即使Follower的Log比Snapshot多
+		// 这条Log也有可能是错误的,Follower要保证这条Log的绝对正确
+		rf.logs[0] = ApplyMsg{
+			CommandValid: true,
+			CommandIndex: LastIncludeIndex,
+			CommandTerm:  LastIncludeTerm,
+		}
+		rf.snapshotData = SnapshotData
+		rf.snapshotLastIndex = LastIncludeIndex
+		rf.persist()
+		return true
 	}
-	// 清空Follower的Logs,存入第一条(也就是Snapshot的最后一条)Log
-	rf.logs = make([]ApplyMsg, 1)
-	rf.logs[0] = ApplyMsg{
-		CommandIndex: LastIncludeIndex,
-		CommandTerm:  LastIncludeTerm,
-	}
-	rf.snapshotData = SnapshotData
-	rf.snapshotLastIndex = LastIncludeIndex
-	rf.persist()
-	// 重设Raft的状态(index一定是大于当前commitIndex的)
-	rf.lastAppliedIndex = LastIncludeIndex
-	rf.commitIndex = LastIncludeIndex
-	return true
+	return false
 }
 
 // InstallSnapshot 只会被Leader调用,也就是被动快照,因为当前自身的Logs过于老旧才会被Leader调用
@@ -269,9 +280,9 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 		rf.increaseTerm(args.LeaderTerm)
 	}
 	reply.FollowerTerm = rf.currentTerm
-	if rf.currentTerm <= args.LeaderTerm && args.LastIncludeIndex > rf.commitIndex && rf.lastAppliedIndex == rf.commitIndex {
-		// 发送该Snapshot到Server(状态机),使用goroutine避免被阻塞
+	if rf.currentTerm <= args.LeaderTerm && rf.isAvailableSnapshot(args.LastIncludeIndex) {
 		go func() {
+			// 发送该Snapshot到Server(状态机),使用goroutine避免被阻塞
 			rf.applyCh <- ApplyMsg{
 				SnapshotValid: true,
 				Snapshot:      args.SnapshotData,
@@ -280,6 +291,11 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 			}
 		}()
 	}
+}
+
+// 是否为可用的Snapshot,要比自己的Snapshot更新并且可以被安装(不能有未提交的Log)
+func (rf *Raft) isAvailableSnapshot(lastIncludeIndex int) bool {
+	return lastIncludeIndex > rf.commitIndex && rf.lastAppliedIndex == rf.commitIndex && lastIncludeIndex > rf.snapshotLastIndex
 }
 
 // RequestVote Follower,给Candidate投票
@@ -358,7 +374,7 @@ func (rf *Raft) killed() bool {
 
 // 检查是否需要开始选举
 func (rf *Raft) ticker() {
-	for rf.killed() == false {
+	for !rf.killed() {
 		rf.mu.Lock()
 		// 检查是否要开始领导选举
 		if rf.isHeartBeatTimeOut() && rf.role == follower {
@@ -374,7 +390,7 @@ func (rf *Raft) ticker() {
 
 // Cond唤醒器,防止状态改变时唤醒Cond失败(可能不在Wait中)
 func (rf *Raft) condWaker() {
-	for rf.killed() == false {
+	for !rf.killed() {
 		// 防止Cond没有收到状态改变时的Signal,仅出现于极个别情况
 		rf.checkCommitCond.Signal()
 		rf.applierCond.Signal()
@@ -384,7 +400,7 @@ func (rf *Raft) condWaker() {
 
 // 提交Log到状态机,更新lastAppliedIndex为commitIndex
 func (rf *Raft) applier() {
-	for rf.killed() == false {
+	for !rf.killed() {
 		rf.mu.Lock()
 		if rf.commitIndex > rf.lastAppliedIndex {
 			// 有Log没有被提交上去,开始提交
@@ -435,7 +451,7 @@ func (rf *Raft) startElection() {
 	// 并行地收集选票
 	go rf.collectVotes()
 	// 检查结果
-	for rf.killed() == false {
+	for !rf.killed() {
 		rf.mu.Lock()
 		voteCount := rf.getGrantedVotes()
 		if rf.role == follower {
@@ -521,7 +537,7 @@ func (rf *Raft) collectVotes() {
 
 // leader,检查是否可以更新commitIndex,不是Leader不会唤醒这个goroutine
 func (rf *Raft) checkCommittedLogs() {
-	for rf.killed() == false {
+	for !rf.killed() {
 		// 等待matchIndex更新后唤醒自己
 		rf.checkCommitCond.L.Lock()
 		rf.checkCommitCond.Wait()
@@ -551,7 +567,7 @@ func (rf *Raft) checkCommittedLogs() {
 
 // Leader,持续推送Logs给Follower
 func (rf *Raft) pushLogsToFollower(server int, startTerm int) {
-	for rf.killed() == false {
+	for !rf.killed() {
 		rf.mu.Lock()
 		if startTerm != rf.currentTerm {
 			// Leader状态改变,停止推送Logs
@@ -576,12 +592,7 @@ func (rf *Raft) pushLog(server int, startTerm int) {
 	nextIndex := rf.nextIndex[server]
 	if nextIndex <= rf.snapshotLastIndex && rf.snapshotLastIndex != 0 {
 		// Leader没有用于同步的Log,推送Snapshot,snapshotLastIndex的Log只能用于校验,其内容在Snapshot里
-		if rf.sendInstallSnapshot(server) {
-			rf.matchIndex[server] = rf.snapshotLastIndex
-			rf.nextIndex[server] = rf.snapshotLastIndex + 1
-			// matchIndex状态改变,唤醒checkCommit
-			rf.checkCommitCond.Signal()
-		}
+		rf.sendInstallSnapshot(server)
 	} else {
 		// 正常追加
 		var pushLogs []ApplyMsg
@@ -653,7 +664,7 @@ func (rf *Raft) sendAppendEntries(logs []ApplyMsg, nextIndex int, server int) (b
 		// 接收到的RPC请求或响应中,任期号T>currentTerm,那么就令currentTerm等于T,并且切换状态为Follower
 		rf.increaseTerm(reply.FollowerTerm)
 	}
-	if args.LeaderTerm != rf.currentTerm || rf.role != leader {
+	if nextIndex != rf.nextIndex[server] || args.LeaderTerm != rf.currentTerm || rf.role != leader {
 		// Leader状态改变,此条RPC作废
 		ok = false
 	}
@@ -674,7 +685,7 @@ func (rf *Raft) sendHeartBeatsToAll(startTerm int) {
 		}
 	}
 	// 发送心跳包,直到自己不为Leader,或Term改变
-	for rf.killed() == false {
+	for !rf.killed() {
 		rf.mu.Lock()
 		if rf.currentTerm != startTerm {
 			// 现在不是Leader,停止发送心跳包
