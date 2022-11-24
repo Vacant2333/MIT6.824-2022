@@ -89,7 +89,7 @@ type Raft struct {
 }
 
 const (
-	Debug = true
+	Debug = false
 
 	follower  = 1
 	candidate = 2
@@ -185,10 +185,12 @@ func (rf *Raft) readPersist(data []byte) {
 
 // 更新自己的commitIndex,要保证commitIndex > rf.commitIndex,并且Lock
 func (rf *Raft) updateCommitIndex(commitIndex int) {
-	DPrintf("s[%v] update commitIndex [%v]->[%v] logsLen:[%v]\n", rf.me, rf.commitIndex, commitIndex, rf.getLogsLen())
-	rf.commitIndex = commitIndex
-	// commitIndex更改,唤醒applier
-	rf.applierCond.Signal()
+	if commitIndex > rf.commitIndex {
+		DPrintf("s[%v] update commitIndex [%v]->[%v] logsLen:[%v] lastApplied[%v]\n", rf.me, rf.commitIndex, commitIndex, rf.getLogsLen(), rf.lastAppliedIndex)
+		rf.commitIndex = commitIndex
+		// commitIndex更改,唤醒applier
+		rf.applierCond.Signal()
+	}
 }
 
 // Snapshot 只会被上层Server调用,也就是主动快照
@@ -408,6 +410,8 @@ func (rf *Raft) applier() {
 					// 提交的Index在snapshotLastIndex之前,直接从下一个开始提交
 					index = rf.snapshotLastIndex
 					rf.lastAppliedIndex = rf.snapshotLastIndex
+					// 通过Snapshot更新lastAppliedIndex时,有可能导致lastAppliedIndex超过commitIndex,会使Raft无法再接受新的Snapshot
+					rf.updateCommitIndex(rf.lastAppliedIndex)
 					continue
 				} else {
 					// 正常Apply Log
@@ -775,9 +779,7 @@ func (rf *Raft) AppendEntries(args *AppendEnTriesArgs, reply *AppendEntriesReply
 			rf.lastNewEntryIndex = args.Logs[len(args.Logs)-1].CommandIndex
 		}
 		// 更新Follower的commitIndex
-		if args.LeaderCommit > rf.commitIndex && rf.lastNewEntryIndex > rf.commitIndex {
-			rf.updateCommitIndex(min(args.LeaderCommit, rf.lastNewEntryIndex))
-		}
+		rf.updateCommitIndex(min(args.LeaderCommit, rf.lastNewEntryIndex))
 	}
 }
 
