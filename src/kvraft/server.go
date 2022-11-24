@@ -132,6 +132,7 @@ func (kv *KVServer) applier() {
 			command, _ := msg.Command.(Op)
 			// 检查任务是否已完成过(一个任务/Log可能会发送多次,因为前几次可能因为某种原因没有及时提交)
 			// 最后一条已完成的任务的Index必须小于当前任务才算没有完成过,因为线性一致性
+			DPrintf("S[%v] apply %v[%v, %v] index[%v]\n", kv.me, command.Type, command.Key, command.Value, msg.CommandIndex)
 			if command.Type != "Get" && kv.getClientLastIndex(command.ClientId) < command.RequestId {
 				// 如果是第一次完成该任务/Log,才保存到KV中
 				if command.Type == "Put" {
@@ -144,7 +145,6 @@ func (kv *KVServer) applier() {
 					} else {
 						kv.kv[command.Key] = command.Value
 					}
-					DPrintf("S[%v] append[%v] index[%v] result[%v]\n", kv.me, command.Value, msg.CommandIndex, kv.kv[command.Key])
 				}
 				// 该任务的Index比之前存的任务Index大,更新
 				kv.clientLastTaskIndex[command.ClientId] = command.RequestId
@@ -154,12 +154,9 @@ func (kv *KVServer) applier() {
 				kv.taskTerm[msg.CommandIndex] = msg.CommandTerm
 				// 通知所有在等待该任务的goroutine
 				cond.Broadcast()
-				if command.Type == "Get" {
-					DPrintf("s[%v] get[%v] index[%v]\n", kv.me, command.Key, msg.CommandIndex)
-				}
 			}
 			// 检查是否需要Snapshot
-			if kv.maxRaftState != -1 && float64(kv.persister.RaftStateSize()) >= float64(kv.maxRaftState)*serverSnapshotStatePercent {
+			if kv.maxRaftState != -1 && float64(kv.persister.RaftStateSize()) > float64(kv.maxRaftState)*serverSnapshotStatePercent {
 				// Raft状态的大小接近阈值,要求Raft进行Snapshot
 				kv.saveSnapshot(msg.CommandIndex)
 			}
@@ -200,14 +197,14 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	return kv
 }
 
-// 保存Snapshot
+// 保存Snapshot(被动快照)
 func (kv *KVServer) saveSnapshot(lastIndex int) {
 	writer := new(bytes.Buffer)
 	encoder := labgob.NewEncoder(writer)
 	if encoder.Encode(kv.kv) == nil &&
 		encoder.Encode(kv.clientLastTaskIndex) == nil {
 		kv.rf.Snapshot(lastIndex, writer.Bytes())
-		DPrintf("S[%v] save snapshot(%v)\n", kv.me, lastIndex)
+		DPrintf("S[%v] save snapshot(%v) size[%v]\n", kv.me, lastIndex, len(writer.Bytes()))
 	}
 	kv.clean(lastIndex)
 }
@@ -224,21 +221,22 @@ func (kv *KVServer) readSnapshot(data []byte) {
 		decoder.Decode(&clientLastTaskIndex) == nil {
 		kv.kv = kvMap
 		kv.clientLastTaskIndex = clientLastTaskIndex
-		DPrintf("S[%v] readSnapshot\n", kv.me)
+		DPrintf("S[%v] readSnapshot size[%v]\n", kv.me, len(data))
 	}
 }
 
 // 清理KVServer
 func (kv *KVServer) clean(lastIndex int) {
 	// todo:检查clean的效果
-	for i := range kv.taskTerm {
-		if i <= lastIndex {
-			delete(kv.taskTerm, i)
+	for index := range kv.taskTerm {
+		if index <= lastIndex {
+			delete(kv.taskTerm, index)
 		}
 	}
-	for i := range kv.doneCond {
-		if i <= lastIndex {
-			delete(kv.doneCond, i)
+	for index := range kv.doneCond {
+		if index <= lastIndex {
+			kv.doneCond[index].Broadcast()
+			delete(kv.doneCond, index)
 		}
 	}
 }

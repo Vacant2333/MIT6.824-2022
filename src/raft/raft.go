@@ -259,7 +259,6 @@ func (rf *Raft) CondInstallSnapshot(LastIncludeTerm int, LastIncludeIndex int, S
 		// 不管如何都要重置Snapshot对应的那条Log,即使Follower的Log比Snapshot多
 		// 这条Log也有可能是错误的,Follower要保证这条Log的绝对正确
 		rf.logs[0] = ApplyMsg{
-			CommandValid: true,
 			CommandIndex: LastIncludeIndex,
 			CommandTerm:  LastIncludeTerm,
 		}
@@ -528,6 +527,7 @@ func (rf *Raft) collectVotes() {
 		args.CandidateLastLogTerm = rf.getLog(-1).CommandTerm
 	}
 	rf.mu.Unlock()
+	// 并行地向除了自已以外的Server要求选票
 	for server := 0; server < len(rf.peers); server++ {
 		if server != rf.me {
 			go askVote(server, args)
@@ -591,7 +591,7 @@ func (rf *Raft) pushLog(server int, startTerm int) {
 	}
 	nextIndex := rf.nextIndex[server]
 	if nextIndex <= rf.snapshotLastIndex && rf.snapshotLastIndex != 0 {
-		// Leader没有用于同步的Log,推送Snapshot,snapshotLastIndex的Log只能用于校验,其内容在Snapshot里
+		// Leader没有用于同步的Log,推送Snapshot,snapshotLastIndex对应的Log只能用于校验,其内容在Snapshot里
 		rf.sendInstallSnapshot(server)
 	} else {
 		// 正常追加
