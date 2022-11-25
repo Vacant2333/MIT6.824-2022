@@ -95,11 +95,11 @@ const (
 	candidate = 2
 	leader    = 3
 
-	tickerSleepTime   = 60 * time.Millisecond  // Ticker睡眠时间
-	electionSleepTime = 25 * time.Millisecond  // 选举检查结果的睡眠时间
-	heartBeatSendTime = 130 * time.Millisecond // 心跳包发送间隔
-	pushLogsSleepTime = 70 * time.Millisecond  // Leader推送Log的间隔
-	wakeCondSleepTime = 550 * time.Millisecond // 唤醒所有Cond的间隔
+	tickerSleepTime    = 60 * time.Millisecond  // Ticker睡眠时间
+	electionSleepTime  = 25 * time.Millisecond  // 选举检查结果的睡眠时间
+	heartBeatSendTime  = 130 * time.Millisecond // 心跳包发送间隔
+	pushLogsSleepTime  = 75 * time.Millisecond  // Leader推送Log的间隔
+	condWakerSleepTime = 600 * time.Millisecond // 唤醒所有Cond的间隔
 
 	electionTimeOutMin = 300 // 选举超时时间(也用于检查是否需要开始选举) 区间
 	electionTimeOutMax = 400
@@ -395,7 +395,7 @@ func (rf *Raft) condWaker() {
 		// 防止Cond没有收到状态改变时的Signal,仅出现于极个别情况
 		rf.checkCommitCond.Signal()
 		rf.applierCond.Signal()
-		time.Sleep(wakeCondSleepTime)
+		time.Sleep(condWakerSleepTime)
 	}
 }
 
