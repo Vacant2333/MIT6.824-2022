@@ -64,6 +64,8 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 			// 任务被其他Server处理了
 			reply.Err = ErrWrongLeader
 		}
+		delete(kv.taskTerm, index)
+		delete(kv.doneCond, index)
 	}
 	kv.mu.Unlock()
 }
@@ -92,6 +94,8 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 			// 任务被其他Server处理了
 			reply.Err = ErrWrongLeader
 		}
+		delete(kv.taskTerm, index)
+		delete(kv.doneCond, index)
 	}
 	kv.mu.Unlock()
 }
@@ -206,7 +210,6 @@ func (kv *KVServer) saveSnapshot(lastIndex int) {
 		kv.rf.Snapshot(lastIndex, writer.Bytes())
 		DPrintf("S[%v] save snapshot(%v) size[%v]\n", kv.me, lastIndex, len(writer.Bytes()))
 	}
-	kv.clean(lastIndex)
 }
 
 // 读取Snapshot
@@ -222,22 +225,6 @@ func (kv *KVServer) readSnapshot(data []byte) {
 		kv.kv = kvMap
 		kv.clientLastTaskIndex = clientLastTaskIndex
 		DPrintf("S[%v] readSnapshot size[%v]\n", kv.me, len(data))
-	}
-}
-
-// 清理KVServer
-func (kv *KVServer) clean(lastIndex int) {
-	// todo:检查clean的效果
-	for index := range kv.taskTerm {
-		if index <= lastIndex {
-			delete(kv.taskTerm, index)
-		}
-	}
-	for index := range kv.doneCond {
-		if index <= lastIndex {
-			kv.doneCond[index].Broadcast()
-			delete(kv.doneCond, index)
-		}
 	}
 }
 
